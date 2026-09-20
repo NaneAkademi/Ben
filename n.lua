@@ -501,7 +501,7 @@ local function MainLoop()
                     local col=C_GREEN; if pct<30 then col=C_RED elseif pct<70 then col=C_YELLOW end
                     local knocked=(enemy.HealthStatus==1 or hp<=0)
                     if knocked then col={R=0,G=100,B=255,A=255} end
-                    HUD:AddDebugText(string.format("HP:%d%%",pct),enemy,0.06,{X=0,Y=-40,Z=190},{X=0,Y=-40,Z=190},col,true,false,true,nil,1.1,true)
+                    HUD:AddDebugText(string.format("HP:%d%%",pct),enemy,0.06,{X=0,Y=0,Z=200},{X=0,Y=0,Z=200},col,true,false,true,nil,1.1,true)
                     HUD:AddDebugText(string.format("[%dm]",math.floor(distM)),enemy,0.06,{X=0,Y=0,Z=150},{X=0,Y=0,Z=150},C_CYAN,true,false,true,nil,1.0,true)
                     if knocked then
                         HUD:AddDebugText("KNOCKED",enemy,0.06,{X=0,Y=0,Z=250},{X=0,Y=0,Z=250},{R=0,G=100,B=255,A=255},true,false,true,nil,0.9,true)
