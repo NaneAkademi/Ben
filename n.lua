@@ -489,6 +489,7 @@ local function MainLoop()
                 local distM=9999
                 pcall(function() distM=player:GetDistanceTo(enemy)/100 end)
 
+                
                 -- ── ESP TIPE 1 ──────────────────────────────────
                 if C.EspVip and HUD then
                     pcall(function()
