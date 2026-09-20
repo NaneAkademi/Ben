@@ -694,19 +694,7 @@ if not _G._CinedSkinDone then
 -- ── SKİN LİSTESİ — BURAYA EKLE/ÇIKAR ────────────────────────────
 local SKIN_ITEMS = {
     -- ── M416 ─────────────────────────────────────────────
-    1101004163, -- Hoàng Gia Lộng Lẫy (Cấp 8)
-    1101004201, -- Bạch Lân Nhả Ngọc (Cấp 8)
-    1101004209, -- Thủy Triều Dậy Sóng (Cấp 8)
-    1101004218, -- Ma Ảnh (Cấp 8)
-    1101004226, -- Phong Ấn U Minh (Cấp 8)
-    1101004236, -- Lam Sư Đoạt Mệnh (Cấp 8)
-    1101004246, -- Hỏa Liên (Cấp 8)
-    1101004046, -- Băng Giá (Cấp 7)
-    1101004062, -- Chú Hề (Cấp 7)
-    1101004078, -- Kẻ Lang Thang (Cấp 7)
-    1101004086, -- Bò Sát Gầm Gừ (Cấp 7)
-    1101004098, -- Tiếng Gọi Hoang Dã (Cấp 7)
-    1101004138, -- Lõi Công Nghệ (Cấp 7)
+    101004, -- Hoàng Gia Lộng Lẫy (Cấp 8)
 
     -- ═════════════════════════════════════════════════════
     -- X-SUIT
