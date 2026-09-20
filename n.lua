@@ -526,7 +526,7 @@ local function MainLoop()
                         end)
                         local ratio=math.max(0,math.min(1,(hp or 100)/math.max(1,maxHp or 100)))
                         if enemy.Replay_IsEnemyFrameUIExisted and not enemy:Replay_IsEnemyFrameUIExisted() then
-                            enemy:Replay_CreateEnemyFrameUI(true,true)
+                            enemy:Replay_CreateEnemyFrameUI(false,true)
                         end
                         if enemy.Replay_SetVisiableOfFrameUI then enemy:Replay_SetVisiableOfFrameUI(true) end
                         if enemy.Replay_UpdateEnemyFrameUI  then enemy:Replay_UpdateEnemyFrameUI(ratio)  end
