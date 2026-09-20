@@ -489,23 +489,39 @@ local function MainLoop()
                 local distM=9999
                 pcall(function() distM=player:GetDistanceTo(enemy)/100 end)
 
-                -- ── ESP TIPE 1 ──────────────────────────────────
-                if C.EspVip and HUD then
-                    local hp,maxHp=100,100
-                    pcall(function()
-                        if enemy.Health then hp=enemy.Health elseif type(enemy.GetHealth)=="function" then hp=enemy:GetHealth() end
-                        if enemy.HealthMax then maxHp=enemy.HealthMax elseif type(enemy.GetHealthMax)=="function" then maxHp=enemy:GetHealthMax() end
-                    end)
-                    hp=math.max(0,hp or 0); maxHp=math.max(1,maxHp or 100)
-                    local pct=math.floor((hp/maxHp)*100+0.5)
-                    local col=C_GREEN; if pct<30 then col=C_RED elseif pct<70 then col=C_YELLOW end
-                    local knocked=(enemy.HealthStatus==1 or hp<=0)
-                    if knocked then col={R=0,G=100,B=255,A=255} end
-                    HUD:AddDebugText(string.format("HP:%d%%",pct),enemy,0.06,{X=0,Y=0,Z=200},{X=0,Y=0,Z=200},col,true,false,true,nil,1.1,true)
-                    HUD:AddDebugText(string.format("[%dm]",math.floor(distM)),enemy,0.06,{X=0,Y=0,Z=150},{X=0,Y=0,Z=150},C_CYAN,true,false,true,nil,1.0,true)
-                    if knocked then
-                        HUD:AddDebugText("KNOCKED",enemy,0.06,{X=0,Y=0,Z=250},{X=0,Y=0,Z=250},{R=0,G=100,B=255,A=255},true,false,true,nil,0.9,true)
-                    end
+-- ── ESP TIPE 1 ──────────────────────────────────
+if C.EspVip and HUD then
+    local hp, maxHp = 100, 100
+    pcall(function()
+        if enemy.Health then hp = enemy.Health
+        elseif type(enemy.GetHealth) == "function" then hp = enemy:GetHealth() end
+        if enemy.HealthMax then maxHp = enemy.HealthMax
+        elseif type(enemy.GetHealthMax) == "function" then maxHp = enemy:GetHealthMax() end
+    end)
+    hp = math.max(0, hp or 0)
+    maxHp = math.max(1, maxHp or 100)
+    local ratio = hp / maxHp
+    local pct   = math.floor(ratio * 100 + 0.5)
+
+    -- Renge göre HP rengi
+    local col = C_GREEN
+    if pct < 30 then col = C_RED
+    elseif pct < 70 then col = C_YELLOW end
+
+    local knocked = (enemy.HealthStatus == 1 or hp <= 0)
+    if knocked then col = {R=0, G=100, B=255, A=255} end
+
+    -- Yatay can çubuğu  →  [████████░░]
+    local BAR_LEN = 10
+    local filled  = knocked and 0 or math.max(0, math.min(BAR_LEN, math.floor(ratio * BAR_LEN + 0.5)))
+    local bar = "[" .. string.rep("█", filled) .. string.rep("░", BAR_LEN - filled) .. "]"
+
+    HUD:AddDebugText(bar, enemy, 0.06, {X=0,Y=0,Z=200}, {X=0,Y=0,Z=200}, col, true, false, true, nil, 1.1, true)
+    HUD:AddDebugText(string.format("[%dm]", math.floor(distM)), enemy, 0.06, {X=0,Y=0,Z=150}, {X=0,Y=0,Z=150}, C_CYAN, true, false, true, nil, 1.0, true)
+
+    if knocked then
+        HUD:AddDebugText("KNOCKED", enemy, 0.06, {X=0,Y=0,Z=250}, {X=0,Y=0,Z=250}, {R=0,G=100,B=255,A=255}, true, false, true, nil, 0.9, true)
+    end
                 end
 
                 -- ── ESP ANTENNA ─────────────────────────────────
