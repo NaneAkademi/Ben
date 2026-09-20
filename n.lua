@@ -146,7 +146,7 @@ if not _G.CinedMenuDone or not _already then
              Get=function() return C.EspAntenna  end, Set=function(v) C.EspAntenna=v  end},
             {Key="Cined_EspFrameUI",  Text="ESP Box (HP Bar)",
              Get=function() return C.EspFrameUI  end, Set=function(v) C.EspFrameUI=v  end},
-            {Key="Cined_EspSkeleton", Text="ESP Skeleton (Iskelet)",
+            {Key="Cined_EspSkeleton", Text="ESP Iskelet",
              Get=function() return C.EspSkeleton end, Set=function(v) C.EspSkeleton=v end},
             {Key="Cined_EspLine",     Text="ESP Line (Snapline)",
              Get=function() return C.EspLine     end, Set=function(v) C.EspLine=v     end},
