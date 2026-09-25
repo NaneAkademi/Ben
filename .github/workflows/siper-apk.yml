@@ -1,0 +1,73 @@
+name: Siper Hattı APK
+
+on:
+  push:
+    paths:
+      - 'siper-hatti/**'
+      - '.github/workflows/siper-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: siper-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: siper-hatti/web/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Web oyununu derle
+        working-directory: siper-hatti/web
+        run: |
+          npm ci
+          npm run build
+
+      - name: APK derle ve imzala
+        working-directory: siper-hatti
+        env:
+          KEYSTORE_B64: ${{ secrets.SIPER_KEYSTORE_B64 }}
+          KEYSTORE_PASS_SECRET: ${{ secrets.SIPER_KEYSTORE_PASS }}
+        run: |
+          # İsteğe bağlı: kendi gizli imza anahtarın (Settings > Secrets) varsa onu kullan
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            export KEYSTORE="$RUNNER_TEMP/release.keystore"
+            export KEYSTORE_PASS="$KEYSTORE_PASS_SECRET"
+          fi
+          export VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))
+          export VERSION_NAME="2.0.$VERSION_CODE"
+          export APK_NAME="SiperHatti-$VERSION_NAME.apk"
+          ./tools/build-apk.sh
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "APK_PATH=siper-hatti/build/$APK_NAME" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SiperHatti-${{ env.VERSION_NAME }}
+          path: ${{ env.APK_PATH }}
+
+      - name: Sürüm (Release) yayınla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="siper-v$VERSION_NAME"
+          EXTRA="--latest"
+          if [ "$GITHUB_REF_NAME" != "${{ github.event.repository.default_branch }}" ]; then EXTRA="--prerelease"; fi
+          gh release create "$TAG" "$APK_PATH" --target "$GITHUB_SHA" \
+            --title "Siper Hattı $VERSION_NAME" $EXTRA \
+            --notes "Android için APK. Telefonda bu sayfadan **$(basename "$APK_PATH")** dosyasını indirip kur (bilinmeyen kaynaklara izin vermen gerekebilir). Dal: \`$GITHUB_REF_NAME\`"

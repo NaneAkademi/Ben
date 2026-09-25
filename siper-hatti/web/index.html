@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#15180D">
+<meta name="color-scheme" content="dark">
+<title>Siper Hattı 3D</title>
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="gl"></canvas>
+  <div id="labels"></div>
+  <div id="touch"></div>
+
+  <div id="hud" hidden>
+    <div class="hud-top">
+      <div class="hp-wrap">
+        <div class="hp-bar"><i id="hpFill"></i><b id="hpText">100</b></div>
+        <div id="status"></div>
+      </div>
+      <div id="info"></div>
+      <button id="pauseBtn" class="icon-btn" aria-label="Menü">❚❚</button>
+    </div>
+    <canvas id="minimap" width="200" height="200"></canvas>
+    <div id="feed"></div>
+    <div id="banner"><h2></h2><p></p></div>
+    <div id="popup"></div>
+    <div id="hitmarker"></div>
+    <div id="dmgdir"></div>
+    <div id="lock"></div>
+    <div id="deadbox" hidden><h3>Vuruldun</h3><p></p></div>
+    <div id="fps" hidden></div>
+    <div id="ctrl">
+      <div id="joy"><i></i></div>
+      <button id="btnBoost" class="abil"><span>NİTRO</span><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="16"/></svg></button>
+      <button id="btnHe" class="abil"><span>AĞIR<br>MERMİ</span><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="16"/></svg></button>
+      <button id="btnFire"><span>ATEŞ</span><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="16"/></svg></button>
+    </div>
+    <div id="scoreboard" hidden></div>
+  </div>
+
+  <!-- ANA MENÜ -->
+  <section id="scrMenu" class="screen">
+    <div class="menu-grid">
+      <div class="menu-main">
+        <h1 class="logo"><span>SİPER</span><span>HATTI</span><small>3D TANK SAVAŞI</small></h1>
+        <div class="menu-buttons">
+          <button class="btn primary" data-go="solo">Tek Oyuncu<small>Dalgalara ya da botlara karşı</small></button>
+          <button class="btn" id="btnHost">Oda Kur<small>Arkadaşlarını davet et</small></button>
+          <button class="btn" data-go="join">Odaya Katıl<small>Oda kodunu gir</small></button>
+          <div class="row">
+            <button class="btn ghost" data-go="settings">Ayarlar</button>
+            <button class="btn ghost" data-go="help">Nasıl Oynanır</button>
+          </div>
+        </div>
+      </div>
+      <div class="card profile">
+        <label class="field">Komutan adın
+          <input id="nameIn" maxlength="14" placeholder="Komutan" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="field">Tank rengi</div>
+        <div id="colors" class="swatches"></div>
+        <p class="hint" id="netHint">Çok oyunculu mod internet gerektirir. Oyun verisi cihazlar arasında doğrudan (P2P) akar.</p>
+      </div>
+    </div>
+    <p id="ver" class="ver"></p>
+  </section>
+
+  <!-- TEK OYUNCU -->
+  <section id="scrSolo" class="screen" hidden>
+    <div class="panel">
+      <header><button class="back" data-back>‹</button><h2>Tek Oyuncu</h2></header>
+      <div class="opts" id="soloOpts"></div>
+      <div class="actions"><button class="btn primary" id="soloStart">Savaşa Başla</button></div>
+    </div>
+  </section>
+
+  <!-- KATIL -->
+  <section id="scrJoin" class="screen" hidden>
+    <div class="panel narrow">
+      <header><button class="back" data-back>‹</button><h2>Odaya Katıl</h2></header>
+      <p class="hint">Arkadaşının ekranındaki 4 haneli oda kodunu yaz.</p>
+      <input id="codeIn" class="code-input" maxlength="4" placeholder="ABCD" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text">
+      <div class="actions"><button class="btn primary" id="joinBtn">Katıl</button></div>
+      <p class="hint" id="joinMsg"></p>
+    </div>
+  </section>
+
+  <!-- LOBİ -->
+  <section id="scrLobby" class="screen" hidden>
+    <div class="panel wide">
+      <header><button class="back" data-back>‹</button><h2>Oda</h2>
+        <div class="room-code"><span>ODA KODU</span><b id="roomCode">----</b></div>
+        <div class="code-actions"><button class="btn small" id="shareBtn">Paylaş</button><button class="btn small ghost" id="copyBtn">Kopyala</button></div>
+      </header>
+      <p class="hint" id="lobbyMsg"></p>
+      <div class="lobby-grid">
+        <div>
+          <h3>Oyuncular</h3>
+          <ul id="plist" class="plist"></ul>
+        </div>
+        <div>
+          <h3>Maç ayarları</h3>
+          <div class="opts" id="lobbyOpts"></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn" id="readyBtn">Hazırım</button>
+        <button class="btn primary" id="startBtn">Maçı Başlat</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- AYARLAR -->
+  <section id="scrSettings" class="screen" hidden>
+    <div class="panel narrow">
+      <header><button class="back" data-back>‹</button><h2>Ayarlar</h2></header>
+      <div class="opts" id="setOpts"></div>
+    </div>
+  </section>
+
+  <!-- YARDIM -->
+  <section id="scrHelp" class="screen" hidden>
+    <div class="panel">
+      <header><button class="back" data-back>‹</button><h2>Nasıl Oynanır</h2></header>
+      <div class="help">
+        <div>
+          <h3>Kontroller</h3>
+          <p><b>Dokunmatik:</b> Ekranın solunda parmağını sürükle: yukarı ileri, aşağı geri, sağa-sola döner. Sağdaki <b>ATEŞ</b> tuşuna basılı tut. <b>AĞIR MERMİ</b> alan hasarı verir, <b>NİTRO</b> kısa süre hızlandırır.</p>
+          <p><b>Klavye:</b> W A S D ile sür, Boşluk / sol tık ateş, E / sağ tık ağır mermi, Shift nitro, Esc menü, Tab skor.</p>
+          <p><b>Oyun kolu:</b> Sol çubuk sürüş, RT/A ateş, B/RB ağır mermi, LB/X nitro.</p>
+          <p>Taret en yakın düşmana <b>kendiliğinden</b> nişan alır ve hareketini hesaba katar. Sen sürüşe ve siperlere odaklan.</p>
+        </div>
+        <div>
+          <h3>Modlar</h3>
+          <p><b>Hayatta Kal:</b> Kenarlardan gelen düşman tanklarına karşı dayan. Her 5. dalgada Komutan Tankı gelir. Arkadaşlarınla birlikte oynayabilirsin (en fazla 4 kişi).</p>
+          <p><b>Ölüm Maçı:</b> Herkes birbirine karşı. Belirlenen vuruş sayısına ilk ulaşan kazanır. Boş yerleri botlar doldurabilir.</p>
+          <h3>İpuçları</h3>
+          <p>Kırmızı variller patlar, düşmanları yanına çek. Duvarlar ve kum torbaları mermiyi durdurur. Yeşil bonus onarır, mavi kalkan verir, turuncu seri atış sağlar.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DURAKLAT -->
+  <section id="scrPause" class="screen dim" hidden>
+    <div class="panel narrow center">
+      <h2 id="pauseTitle">Duraklatıldı</h2>
+      <p class="hint" id="pauseHint"></p>
+      <div class="menu-buttons">
+        <button class="btn primary" id="resumeBtn">Devam Et</button>
+        <button class="btn" data-go="settings">Ayarlar</button>
+        <button class="btn ghost" id="quitBtn">Maçtan Çık</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- SONUÇ -->
+  <section id="scrResults" class="screen dim" hidden>
+    <div class="panel center">
+      <h2 id="resTitle"></h2>
+      <p class="hint" id="resSub"></p>
+      <table class="results"><thead><tr><th></th><th>Oyuncu</th><th>Vuruş</th><th>Ölüm</th><th>Puan</th></tr></thead><tbody id="resBody"></tbody></table>
+      <div class="actions">
+        <button class="btn primary" id="againBtn">Tekrar Oyna</button>
+        <button class="btn ghost" id="resLobbyBtn">Lobiye Dön</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast"></div>
+  <div id="loading"><div class="logo small"><span>SİPER</span><span>HATTI</span></div><p>Yükleniyor…</p></div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>

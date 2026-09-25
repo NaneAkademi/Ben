@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Siper Hattı</string>
+    <color name="ink">#15180D</color>
+    <color name="icon_bg">#2B3119</color>
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/ink</item>
+        <item name="android:colorBackground">@color/ink</item>
+        <item name="android:statusBarColor">@color/ink</item>
+        <item name="android:navigationBarColor">@color/ink</item>
+    </style>
+</resources>
