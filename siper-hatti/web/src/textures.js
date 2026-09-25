@@ -404,3 +404,243 @@ export function fenceTexture() {
     return tex(c);
   });
 }
+
+// Oluklu konteyner sacı (renk malzemeden gelir; bu doku gri tonlu)
+export function containerTexture() {
+  return once('container', () => {
+    const [c, g] = canvas(256, 128);
+    g.fillStyle = '#d0d0d0';
+    g.fillRect(0, 0, 256, 128);
+    for (let x = 0; x < 256; x += 8) {
+      const grd = g.createLinearGradient(x, 0, x + 8, 0);
+      grd.addColorStop(0, '#9a9a9a');
+      grd.addColorStop(0.5, '#f2f2f2');
+      grd.addColorStop(1, '#a8a8a8');
+      g.fillStyle = grd;
+      g.fillRect(x, 0, 8, 128);
+    }
+    const R = mulberry32(21);
+    for (let i = 0; i < 70; i++) {
+      g.fillStyle = `rgba(90,60,40,${0.08 + R() * 0.18})`;
+      g.beginPath();
+      g.ellipse(R() * 256, R() * 128, 2 + R() * 10, 1 + R() * 5, 0, 0, 7);
+      g.fill();
+    }
+    g.fillStyle = 'rgba(0,0,0,0.25)';
+    g.fillRect(0, 0, 256, 5);
+    g.fillRect(0, 123, 256, 5);
+    return tex(c, { repeat: [1, 1] });
+  });
+}
+
+// Kiremit çatı
+export function roofTexture() {
+  return once('roof', () => {
+    const [c, g] = canvas(128);
+    const R = mulberry32(31);
+    g.fillStyle = '#d8d8d8';
+    g.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 12) {
+      for (let x = (y / 12) % 2 ? -8 : 0; x < 128; x += 16) {
+        const v = 170 + R() * 70;
+        const grd = g.createLinearGradient(0, y, 0, y + 12);
+        grd.addColorStop(0, `rgb(${v},${v},${v})`);
+        grd.addColorStop(1, `rgb(${v * 0.62},${v * 0.62},${v * 0.62})`);
+        g.fillStyle = grd;
+        g.beginPath();
+        g.moveTo(x + 1, y);
+        g.lineTo(x + 15, y);
+        g.quadraticCurveTo(x + 15, y + 12, x + 8, y + 12);
+        g.quadraticCurveTo(x + 1, y + 12, x + 1, y);
+        g.fill();
+      }
+    }
+    return tex(c, { repeat: [1, 1] });
+  });
+}
+
+// Kütük ev duvarı
+export function logTexture() {
+  return once('log', () => {
+    const [c, g] = canvas(128);
+    const R = mulberry32(41);
+    for (let y = 0; y < 128; y += 16) {
+      const grd = g.createLinearGradient(0, y, 0, y + 16);
+      grd.addColorStop(0, '#6e6e6e');
+      grd.addColorStop(0.3, '#d8d8d8');
+      grd.addColorStop(0.7, '#bdbdbd');
+      grd.addColorStop(1, '#555');
+      g.fillStyle = grd;
+      g.fillRect(0, y, 128, 16);
+      for (let k = 0; k < 10; k++) {
+        g.fillStyle = `rgba(40,40,40,${0.1 + R() * 0.15})`;
+        g.fillRect(R() * 128, y + 3 + R() * 10, 8 + R() * 30, 1);
+      }
+    }
+    return tex(c, { repeat: [1, 1] });
+  });
+}
+
+// Sıvalı / ahşap cephe (pencere ve kapı izleriyle)
+export function facadeTexture(tint) {
+  return once('facade' + tint, () => {
+    const [c, g] = canvas(256, 128);
+    const R = mulberry32(51);
+    g.fillStyle = tint;
+    g.fillRect(0, 0, 256, 128);
+    for (let i = 0; i < 1200; i++) {
+      const v = R() < 0.5 ? 255 : 0;
+      g.fillStyle = `rgba(${v},${v},${v},${0.03 + R() * 0.05})`;
+      g.fillRect(R() * 256, R() * 128, 2 + R() * 3, 2 + R() * 3);
+    }
+    // pencereler
+    for (const x of [30, 150]) {
+      g.fillStyle = '#3a342c';
+      g.fillRect(x, 36, 42, 40);
+      g.fillStyle = '#6d8fa6';
+      g.fillRect(x + 4, 40, 15, 15);
+      g.fillRect(x + 23, 40, 15, 15);
+      g.fillRect(x + 4, 57, 15, 15);
+      g.fillRect(x + 23, 57, 15, 15);
+      g.fillStyle = 'rgba(255,255,255,0.35)';
+      g.fillRect(x + 5, 41, 5, 12);
+      g.fillStyle = '#5a4634';
+      g.fillRect(x - 6, 34, 6, 44);
+      g.fillRect(x + 42, 34, 6, 44);
+    }
+    // kapı
+    g.fillStyle = '#5b4231';
+    g.fillRect(96, 50, 34, 78);
+    g.fillStyle = 'rgba(0,0,0,0.25)';
+    g.fillRect(100, 56, 26, 30);
+    g.fillRect(100, 92, 26, 30);
+    const grd = g.createLinearGradient(0, 128, 0, 90);
+    grd.addColorStop(0, 'rgba(60,45,30,0.5)');
+    grd.addColorStop(1, 'rgba(60,45,30,0)');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 256, 128);
+    return tex(c);
+  });
+}
+
+export function canvasTexture() {
+  return once('tentcanvas', () => {
+    const [c, g] = canvas(128);
+    const R = mulberry32(61);
+    g.fillStyle = '#c8c8c8';
+    g.fillRect(0, 0, 128, 128);
+    g.globalAlpha = 0.2;
+    for (let i = 0; i < 128; i += 2) {
+      g.fillStyle = i % 4 ? '#ffffff' : '#808080';
+      g.fillRect(0, i, 128, 1);
+    }
+    g.globalAlpha = 1;
+    for (let i = 0; i < 30; i++) {
+      g.fillStyle = `rgba(60,50,30,${R() * 0.15})`;
+      g.beginPath();
+      g.arc(R() * 128, R() * 128, 3 + R() * 12, 0, 7);
+      g.fill();
+    }
+    return tex(c, { repeat: [1, 1] });
+  });
+}
+
+export function concreteTexture() {
+  return once('concrete', () => {
+    const [c, g] = canvas(128);
+    const R = mulberry32(71);
+    g.fillStyle = '#bdbab2';
+    g.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 1500; i++) {
+      const v = 130 + R() * 110;
+      g.fillStyle = `rgba(${v},${v},${v - 5},0.35)`;
+      g.fillRect(R() * 128, R() * 128, 1 + R() * 2, 1 + R() * 2);
+    }
+    g.fillStyle = '#d6b23a';
+    for (let x = -20; x < 140; x += 36) {
+      g.beginPath();
+      g.moveTo(x, 18);
+      g.lineTo(x + 16, 18);
+      g.lineTo(x + 26, 8);
+      g.lineTo(x + 10, 8);
+      g.fill();
+    }
+    return tex(c, { repeat: [1, 1] });
+  });
+}
+
+export function hayTexture() {
+  return once('hay', () => {
+    const [c, g] = canvas(128);
+    const R = mulberry32(81);
+    g.fillStyle = '#d9b964';
+    g.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 900; i++) {
+      const v = R();
+      g.strokeStyle = v < 0.5 ? 'rgba(140,105,40,0.5)' : 'rgba(255,240,170,0.5)';
+      g.lineWidth = 1;
+      g.beginPath();
+      const x = R() * 128, y = R() * 128;
+      g.moveTo(x, y);
+      g.lineTo(x + (R() - 0.5) * 16, y + (R() - 0.5) * 5);
+      g.stroke();
+    }
+    return tex(c, { repeat: [1, 1] });
+  });
+}
+
+// Yumuşak bulut sprite'ı
+export function cloudTexture() {
+  return once('cloud', () => {
+    const [c, g] = canvas(256, 128);
+    const R = mulberry32(91);
+    for (let i = 0; i < 40; i++) {
+      const x = 40 + R() * 176, y = 50 + R() * 40 - Math.abs(x - 128) * 0.12, r = 18 + R() * 30;
+      const grd = g.createRadialGradient(x, y, 0, x, y, r);
+      grd.addColorStop(0, 'rgba(255,255,255,0.55)');
+      grd.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grd;
+      g.fillRect(0, 0, 256, 128);
+    }
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  });
+}
+
+// Su yüzeyi normal haritası (dalgacık)
+export function waterNormal() {
+  return once('waternormal', () => {
+    const S = 128;
+    const [c, g] = canvas(S);
+    const img = g.createImageData(S, S);
+    const h = (x, y) => Math.sin(x * 0.19) * 0.5 + Math.sin(y * 0.23 + x * 0.07) * 0.5 + Math.sin((x + y) * 0.41) * 0.25;
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+      const dx = h(x + 1, y) - h(x - 1, y), dy = h(x, y + 1) - h(x, y - 1);
+      const i = (y * S + x) * 4;
+      img.data[i] = 128 + dx * 60;
+      img.data[i + 1] = 128 + dy * 60;
+      img.data[i + 2] = 255;
+      img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.NoColorSpace;
+    return t;
+  });
+}
+
+// Tanka numara çıkartması
+export function numberDecal(text) {
+  const [c, g] = canvas(128, 64);
+  g.clearRect(0, 0, 128, 64);
+  g.font = 'bold 44px Impact, "Arial Narrow", sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillStyle = 'rgba(240,236,220,0.92)';
+  g.fillText(text, 64, 34);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}

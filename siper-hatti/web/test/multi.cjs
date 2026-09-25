@@ -82,6 +82,7 @@ const state = page => page.evaluate(() => {
       await third.click('#joinBtn');
     }
     if (i === 5 && third) {
+      console.log('GEÇ ekran', await third.evaluate(() => [window.app.ui.screen, document.getElementById('joinMsg').textContent, document.getElementById('toast').textContent]));
       const c = await state(third);
       console.log('GEÇ ', JSON.stringify({ t: c.t, wave: c.wave, n: c.tanks && c.tanks.length, noGame: c.noGame, screen: c.screen }));
       await third.screenshot({ path: `${OUT}/late.png` });

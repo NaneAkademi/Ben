@@ -137,6 +137,15 @@ export class Net extends Emitter {
 
   _wireHost(p) {
     p.on('connection', conn => {
+      const drop = () => {
+        if (this.conns.has(conn.peer)) {
+          this.conns.delete(conn.peer);
+          this.emit('drop', conn.peer);
+          try {
+            conn.close();
+          } catch (e) {}
+        }
+      };
       conn.on('open', () => {
         this.conns.set(conn.peer, { conn, last: performance.now() });
         this.emit('conn', conn.peer);
@@ -144,18 +153,16 @@ export class Net extends Emitter {
       conn.on('data', d => {
         const c = this.conns.get(conn.peer);
         if (c) c.last = performance.now();
+        if (d && d.t === 'bye') {
+          drop();
+          return;
+        }
         if (d && d.t === 'ping') {
           this._send(conn, { t: 'pong', c: d.c });
           return;
         }
         this.emit('msg', conn.peer, d);
       });
-      const drop = () => {
-        if (this.conns.has(conn.peer)) {
-          this.conns.delete(conn.peer);
-          this.emit('drop', conn.peer);
-        }
-      };
       conn.on('close', drop);
       conn.on('error', drop);
     });
@@ -163,10 +170,14 @@ export class Net extends Emitter {
       // eşleştirme sunucusu koptu; mevcut oyuncular etkilenmez, yeni katılım için yeniden bağlan
       if (!this.closed) setTimeout(() => !this.closed && !p.destroyed && p.reconnect(), 1500);
     });
+    let lastTick = performance.now();
     this.timer = setInterval(() => {
       const now = performance.now();
+      // uzun donma (ör. harita yükleme) sonrası zaman aşımı sayma
+      if (now - lastTick > 2500) for (const c of this.conns.values()) c.last = now;
+      lastTick = now;
       for (const [id, c] of this.conns) {
-        if (now - c.last > 7000) {
+        if (now - c.last > 15000) {
           try {
             c.conn.close();
           } catch (e) {}
@@ -219,8 +230,18 @@ export class Net extends Emitter {
   }
 
   _wireClient(conn) {
+    const lost = () => {
+      if (!this.closed) {
+        this.emit('lost', 'Oda sahibiyle bağlantı koptu.');
+        this.close();
+      }
+    };
     conn.on('data', d => {
       this.hostLast = performance.now();
+      if (d && d.t === 'bye') {
+        lost();
+        return;
+      }
       if (d && d.t === 'pong') {
         const r = performance.now() - d.c;
         this.rtt = this.rtt ? this.rtt * 0.7 + r * 0.3 : r;
@@ -228,16 +249,14 @@ export class Net extends Emitter {
       }
       this.emit('msg', 'host', d);
     });
-    const lost = () => {
-      if (!this.closed) {
-        this.emit('lost', 'Oda sahibiyle bağlantı koptu.');
-        this.close();
-      }
-    };
     conn.on('close', lost);
+    let lastTick = performance.now();
     this.timer = setInterval(() => {
-      this._send(conn, { t: 'ping', c: performance.now() });
-      if (performance.now() - this.hostLast > 8000) lost();
+      const now = performance.now();
+      if (now - lastTick > 2500) this.hostLast = now;
+      lastTick = now;
+      this._send(conn, { t: 'ping', c: now });
+      if (now - this.hostLast > 12000) lost();
     }, 1000);
     this.peer.on('disconnected', () => {
       if (!this.closed) setTimeout(() => !this.closed && this.peer && !this.peer.destroyed && this.peer.reconnect(), 1500);
@@ -284,14 +303,18 @@ export class Net extends Emitter {
     if (this.closed) return;
     this.closed = true;
     clearInterval(this.timer);
-    try {
-      for (const c of this.conns.values()) c.conn.close();
-      if (this.hostConn) this.hostConn.close();
-    } catch (e) {}
+    this._send(this.hostConn, { t: 'bye' });
+    for (const c of this.conns.values()) this._send(c.conn, { t: 'bye' });
+    setTimeout(() => {
+      try {
+        for (const c of this.conns.values()) c.conn.close();
+        if (this.hostConn) this.hostConn.close();
+      } catch (e) {}
+    }, 120);
     setTimeout(() => {
       try {
         this.peer && this.peer.destroy();
       } catch (e) {}
-    }, 200);
+    }, 350);
   }
 }

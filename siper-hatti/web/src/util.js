@@ -123,3 +123,13 @@ export function fmtTime(s) {
   s = Math.max(0, Math.ceil(s));
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
+
+// Balistik: yatay mesafe d, yükseklik farkı dy, mermi hızı v için namlu açısı (düz atış çözümü)
+export const ELEV_MIN = -0.14, ELEV_MAX = 0.36;
+export function solveElev(d, dy, v, g = 9.81) {
+  if (d < 0.5) return 0;
+  const v2 = v * v;
+  const disc = v2 * v2 - g * (g * d * d + 2 * dy * v2);
+  if (disc < 0) return ELEV_MAX;
+  return clamp(Math.atan((v2 - Math.sqrt(disc)) / (g * d)), ELEV_MIN, ELEV_MAX);
+}

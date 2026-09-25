@@ -141,13 +141,15 @@ class PSystem {
   }
 }
 
+
 const hex = h => {
   const c = new THREE.Color(h);
   return [c.r, c.g, c.b];
 };
 const FIRE0 = [1.0, 0.92, 0.6], FIRE1 = [1.0, 0.42, 0.08], EMBER = [0.6, 0.12, 0.02];
-const SMOKE_D = [0.16, 0.15, 0.14], SMOKE_L = [0.42, 0.4, 0.37];
+const SMOKE_D = [0.14, 0.13, 0.12], SMOKE_L = [0.5, 0.48, 0.45], SMOKE_W = [0.78, 0.77, 0.75];
 const SPARK = [1.0, 0.85, 0.45];
+const DIRT = [0.24, 0.2, 0.15];
 
 export class FX {
   constructor(stage) {
@@ -157,21 +159,19 @@ export class FX {
     this.add = new PSystem(scene, Math.round(n * 0.55), true);
     this.alpha = new PSystem(scene, n, false);
     this.dustColor = [0.55, 0.49, 0.36];
-    // mermiler: uzatılmış parlak kapsül
     const g = new THREE.SphereGeometry(1, 8, 6);
-    this.shellMat = new THREE.MeshBasicMaterial({ color: '#ffdb8a', toneMapped: false });
+    this.shellMat = new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false });
     this.shellMesh = new THREE.InstancedMesh(g, this.shellMat, 160);
     this.shellMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.shellMesh.count = 0;
     this.shellMesh.frustumCulled = false;
     this.shellMesh.setColorAt(0, new THREE.Color());
     scene.add(this.shellMesh);
-    // şok dalgası halkaları
     this.rings = [];
     const rg = new THREE.RingGeometry(0.8, 1, 40);
     rg.rotateX(-Math.PI / 2);
     for (let i = 0; i < 8; i++) {
-      const m = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color: '#ffcf8a', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+      const m = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color: '#ffe0b0', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
       m.visible = false;
       scene.add(m);
       this.rings.push({ m, t: 0, max: 1, r: 1 });
@@ -196,98 +196,160 @@ export class FX {
     this.rings.forEach(r => (r.m.visible = false));
   }
 
-  muzzle(x, y, z, dx, dz, big = false) {
-    const k = big ? 1.4 : 1;
-    this.add.add(x, y, z, dx * 2, 0, dz * 2, 0.07, 3.2 * k, 4.5 * k, FIRE0, FIRE1, 1, 0, 0);
-    for (let i = 0; i < 7; i++) {
-      const s = rand(4, 16) * k, sp = rand(-0.35, 0.35);
-      const ca = Math.cos(sp), sa = Math.sin(sp);
-      const vx = (dx * ca - dz * sa) * s, vz = (dx * sa + dz * ca) * s;
-      this.add.add(x, y, z, vx, rand(-0.5, 1), vz, rand(0.06, 0.14), rand(0.8, 1.6) * k, 0.3, FIRE0, FIRE1, 1, 0.2, 2, 6);
+  // Top atışı: ateş topu, namlu freni yan jetleri, ileri duman bulutu, yerde toz halkası
+  muzzle(x, y, z, dx, dy, dz, big = false, groundY = null) {
+    const k = big ? 1.35 : 1;
+    const px = -dz, pz = dx; // yatay dik
+    this.add.add(x, y, z, dx * 3, dy * 3, dz * 3, 0.08, 3.6 * k, 5.5 * k, [1, 0.97, 0.8], FIRE1, 1, 0, 0);
+    for (let i = 0; i < 10; i++) {
+      const s = rand(8, 26) * k, sp = rand(-0.18, 0.18);
+      this.add.add(x, y, z, (dx + px * sp) * s, dy * s + rand(-0.5, 1), (dz + pz * sp) * s, rand(0.05, 0.13), rand(0.9, 1.8) * k, 0.3, FIRE0, FIRE1, 1, 0.2, 2, 9);
     }
-    for (let i = 0; i < 5; i++) {
-      const s = rand(1.5, 6);
-      this.alpha.add(x + dx * 0.4, y, z + dz * 0.4, dx * s + rand(-0.6, 0.6), rand(0.2, 1.2), dz * s + rand(-0.6, 0.6), rand(0.8, 1.6), rand(0.8, 1.2) * k, rand(2.5, 4) * k, SMOKE_L, SMOKE_L, 0.45, 0, 1, 2.2, -0.5);
+    // namlu freni: iki yana alev ve duman jeti
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 4; i++) {
+        const s = rand(6, 14) * k;
+        this.add.add(x, y, z, px * side * s + dx * 2, rand(-0.3, 0.6), pz * side * s + dz * 2, rand(0.05, 0.1), rand(0.8, 1.3) * k, 0.3, FIRE0, FIRE1, 1, 0.1, 2, 10);
+      }
+      for (let i = 0; i < 4; i++) {
+        const s = rand(3, 7);
+        this.alpha.add(x, y, z, px * side * s + dx, rand(0.1, 0.8), pz * side * s + dz, rand(1.2, 2.2), 0.8 * k, rand(2.8, 4.2) * k, SMOKE_W, SMOKE_L, 0.5, 0, 1, 1.8, -0.3);
+      }
     }
-    // namlu gerisinde yer tozu
-    const dc = this.dustColor;
-    for (let i = 0; i < 4; i++) this.alpha.add(x - dx * 1.5 + rand(-1, 1), y - 1.1, z - dz * 1.5 + rand(-1, 1), rand(-2, 2), rand(0.3, 1), rand(-2, 2), rand(0.6, 1.1), 1.2, 3.2, dc, dc, 0.35, 0, 1, 2);
-    this.stage.pointFlash(x + dx, y + 0.3, z + dz, big ? 45 : 30, 0.07);
+    for (let i = 0; i < 9; i++) {
+      const s = rand(2, 9);
+      this.alpha.add(x + dx * 0.6, y, z + dz * 0.6, dx * s + rand(-0.8, 0.8), dy * s + rand(0.2, 1.2), dz * s + rand(-0.8, 0.8), rand(1.5, 2.8), rand(1, 1.5) * k, rand(4, 6.5) * k, SMOKE_W, SMOKE_L, 0.5, 0, 1, 1.6, -0.35);
+    }
+    // basınç dalgasıyla kalkan yer tozu
+    if (groundY != null) {
+      const dc = this.dustColor;
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * TAU, s = rand(4, 8) * k;
+        this.alpha.add(x - dx * 1.2 + Math.cos(a) * 0.8, groundY + 0.25, z - dz * 1.2 + Math.sin(a) * 0.8, Math.cos(a) * s + dx * 3, rand(0.3, 1.2), Math.sin(a) * s + dz * 3, rand(0.8, 1.5), 1.4, 4.2 * k, dc, dc, 0.42, 0, 1, 2.6);
+      }
+      this.ring(x + dx * 1.5, groundY + 0.1, z + dz * 1.5, 5 * k, 0.28, 0.35);
+    }
+    this.stage.pointFlash(x + dx, y + 0.3, z + dz, big ? 60 : 42, 0.08);
   }
 
-  sparks(x, y, z, n = 10, speed = 9) {
+  sparks(x, y, z, n = 10, speed = 9, dir = null) {
     for (let i = 0; i < n; i++) {
-      const a = rand(0, TAU), up = rand(0.5, 1.5), s = rand(0.3, 1) * speed;
-      this.add.add(x, y, z, Math.cos(a) * s, up * speed * 0.6, Math.sin(a) * s, rand(0.2, 0.5), rand(0.25, 0.45), 0.1, SPARK, FIRE1, 1, 0.5, 3, 1.5, 14);
+      let vx, vz, vy;
+      if (dir) {
+        const s = rand(0.5, 1) * speed;
+        vx = (dir[0] + rand(-0.35, 0.35)) * s;
+        vy = (dir[1] + rand(0, 0.5)) * s;
+        vz = (dir[2] + rand(-0.35, 0.35)) * s;
+      } else {
+        const a = rand(0, TAU), up = rand(0.5, 1.5), s = rand(0.3, 1) * speed;
+        vx = Math.cos(a) * s;
+        vz = Math.sin(a) * s;
+        vy = up * speed * 0.6;
+      }
+      this.add.add(x, y, z, vx, vy, vz, rand(0.2, 0.55), rand(0.25, 0.5), 0.1, SPARK, FIRE1, 1, 0.5, 3, 1.5, 14);
     }
   }
 
+  // Zırhı delen isabet
+  penetration(x, y, z) {
+    this.sparks(x, y, z, 22, 12);
+    this.add.add(x, y, z, 0, 0, 0, 0.12, 3.2, 4.5, [1, 0.95, 0.7], FIRE1, 1, 0, 0);
+    for (let i = 0; i < 8; i++) this.add.add(x, y, z, rand(-2, 2), rand(0.5, 3), rand(-2, 2), rand(0.25, 0.5), rand(1, 1.8), 0.4, FIRE0, EMBER, 1, 0, 2, 2);
+    for (let i = 0; i < 6; i++) this.alpha.add(x, y, z, rand(-1, 1), rand(0.8, 2), rand(-1, 1), rand(1.4, 2.4), 1, 3.8, SMOKE_D, SMOKE_L, 0.7, 0, 1, 1.2, -0.5);
+    this.stage.pointFlash(x, y + 0.3, z, 40, 0.1);
+  }
+
+  // Sekme: yansıyan kıvılcım çizgisi
+  ricochet(x, y, z, rx, ry, rz) {
+    this.sparks(x, y, z, 16, 16, [rx, ry, rz]);
+    this.add.add(x, y, z, rx * 40, ry * 40, rz * 40, 0.12, 0.9, 0.4, [1, 0.9, 0.6], FIRE1, 1, 0, 3);
+    this.alpha.add(x, y, z, 0, 0.5, 0, 0.8, 0.5, 1.6, SMOKE_L, SMOKE_L, 0.4, 0, 1, 1);
+  }
+
+  // Yere isabet: toprak fıskiyesi
   impact(x, y, z, kind) {
-    if (kind === 'metal') {
-      this.sparks(x, y, z, 14, 10);
-      this.add.add(x, y, z, 0, 0, 0, 0.09, 2.2, 3, FIRE0, FIRE1, 1, 0, 0);
-      for (let i = 0; i < 3; i++) this.alpha.add(x, y, z, rand(-1, 1), rand(0.5, 1.5), rand(-1, 1), rand(0.7, 1.2), 0.8, 2.4, SMOKE_D, SMOKE_L, 0.5, 0, 1, 1.5, -0.4);
-      this.stage.pointFlash(x, y + 0.3, z, 18, 0.06);
-    } else {
-      const dc = kind === 'rock' || kind === 'wall' ? [0.55, 0.52, 0.48] : this.dustColor;
-      this.sparks(x, y, z, 5, 7);
-      for (let i = 0; i < 7; i++) {
+    if (kind === 'metal') return this.penetration(x, y, z);
+    if (kind === 'water') {
+      for (let i = 0; i < 26; i++) {
         const a = rand(0, TAU), s = rand(0.5, 3);
-        this.alpha.add(x, y, z, Math.cos(a) * s, rand(1, 4), Math.sin(a) * s, rand(0.6, 1.2), rand(0.6, 1), rand(2, 3.4), dc, dc, 0.6, 0, 1, 2.5, 1.5);
+        this.alpha.add(x, y, z, Math.cos(a) * s, rand(5, 11), Math.sin(a) * s, rand(0.7, 1.3), rand(0.4, 0.8), rand(1, 1.8), [0.9, 0.95, 1], [0.85, 0.9, 0.95], 0.8, 0, 1, 0.4, 14);
       }
-      for (let i = 0; i < 6; i++) {
-        const a = rand(0, TAU), s = rand(2, 6);
-        this.alpha.add(x, y, z, Math.cos(a) * s, rand(3, 7), Math.sin(a) * s, rand(0.4, 0.8), 0.25, 0.2, [0.2, 0.18, 0.15], [0.2, 0.18, 0.15], 0.95, 0.9, 0, 0.5, 16);
-      }
+      this.ring(x, y + 0.05, z, 3, 0.7, 0.6);
+      return;
+    }
+    const dc = kind === 'rock' || kind === 'wall' ? [0.62, 0.6, 0.56] : this.dustColor;
+    this.sparks(x, y, z, 4, 6);
+    for (let i = 0; i < 10; i++) {
+      const a = rand(0, TAU), s = rand(0.5, 3);
+      this.alpha.add(x, y, z, Math.cos(a) * s, rand(1.5, 5), Math.sin(a) * s, rand(0.8, 1.6), rand(0.7, 1.1), rand(2.4, 3.8), dc, dc, 0.65, 0, 1, 2.2, 1.2);
+    }
+    const debris = kind === 'wall' || kind === 'rock' ? [0.45, 0.42, 0.38] : DIRT;
+    for (let i = 0; i < 14; i++) {
+      const a = rand(0, TAU), s = rand(1.5, 5);
+      this.alpha.add(x, y, z, Math.cos(a) * s, rand(5, 11), Math.sin(a) * s, rand(0.6, 1.1), rand(0.2, 0.4), 0.2, debris, debris, 1, 0.9, 0, 0.3, 18);
     }
   }
 
   explosion(x, y, z, size = 1) {
     const k = size;
-    this.add.add(x, y + 0.8, z, 0, 0, 0, 0.14, 7 * k, 12 * k, [1, 0.95, 0.8], FIRE1, 1, 0, 0);
-    for (let i = 0; i < 22 * k; i++) {
+    this.add.add(x, y + 0.8, z, 0, 0, 0, 0.16, 8 * k, 13 * k, [1, 0.96, 0.82], FIRE1, 1, 0, 0);
+    for (let i = 0; i < 24 * k; i++) {
       const a = rand(0, TAU), s = rand(1, 7) * k, up = rand(1, 6) * k;
-      this.add.add(x + rand(-0.5, 0.5), y + rand(0.3, 1.5), z + rand(-0.5, 0.5), Math.cos(a) * s, up, Math.sin(a) * s, rand(0.35, 0.8), rand(1.5, 2.6) * k, rand(3, 5) * k, FIRE0, EMBER, 1, 0, 2, 2.5, -1);
+      this.add.add(x + rand(-0.5, 0.5), y + rand(0.3, 1.5), z + rand(-0.5, 0.5), Math.cos(a) * s, up, Math.sin(a) * s, rand(0.35, 0.85), rand(1.5, 2.7) * k, rand(3, 5.5) * k, FIRE0, EMBER, 1, 0, 2, 2.5, -1);
+    }
+    for (let i = 0; i < 20 * k; i++) {
+      const a = rand(0, TAU), s = rand(0.5, 4) * k;
+      this.alpha.add(x + rand(-1, 1), y + rand(0.5, 2), z + rand(-1, 1), Math.cos(a) * s, rand(1.5, 5) * k, Math.sin(a) * s, rand(2, 3.6), rand(2, 3) * k, rand(5.5, 9) * k, [0.1, 0.09, 0.08], SMOKE_L, 0.8, 0, 1, 1.4, -0.6);
     }
     for (let i = 0; i < 18 * k; i++) {
-      const a = rand(0, TAU), s = rand(0.5, 4) * k;
-      this.alpha.add(x + rand(-1, 1), y + rand(0.5, 2), z + rand(-1, 1), Math.cos(a) * s, rand(1.5, 5) * k, Math.sin(a) * s, rand(1.6, 3.2), rand(2, 3) * k, rand(5, 8) * k, [0.12, 0.11, 0.1], SMOKE_L, 0.75, 0, 1, 1.4, -0.6);
-    }
-    for (let i = 0; i < 16 * k; i++) {
       const a = rand(0, TAU), s = rand(4, 13) * k;
-      this.alpha.add(x, y + 0.8, z, Math.cos(a) * s, rand(4, 12), Math.sin(a) * s, rand(0.7, 1.4), rand(0.25, 0.45), 0.25, [0.12, 0.1, 0.08], [0.12, 0.1, 0.08], 1, 1, 0, 0.4, 18);
+      this.alpha.add(x, y + 0.8, z, Math.cos(a) * s, rand(4, 13), Math.sin(a) * s, rand(0.8, 1.5), rand(0.25, 0.5), 0.25, [0.12, 0.1, 0.08], [0.12, 0.1, 0.08], 1, 1, 0, 0.4, 18);
     }
-    this.sparks(x, y + 0.8, z, 20 * k, 14 * k);
+    this.sparks(x, y + 0.8, z, 22 * k, 15 * k);
     const dc = this.dustColor;
-    for (let i = 0; i < 10 * k; i++) {
-      const a = (i / (10 * k)) * TAU, s = rand(6, 10) * k;
-      this.alpha.add(x, y + 0.2, z, Math.cos(a) * s, rand(0.2, 1), Math.sin(a) * s, rand(0.8, 1.4), 1.5 * k, 4 * k, dc, dc, 0.55, 0, 1, 3);
+    for (let i = 0; i < 12 * k; i++) {
+      const a = (i / (12 * k)) * TAU, s = rand(6, 11) * k;
+      this.alpha.add(x, y + 0.2, z, Math.cos(a) * s, rand(0.2, 1), Math.sin(a) * s, rand(0.8, 1.5), 1.5 * k, 4.5 * k, dc, dc, 0.55, 0, 1, 3);
     }
-    this.ring(x, y + 0.15, z, 7 * k, 0.45);
-    this.stage.pointFlash(x, y + 1.5, z, 80 * k, 0.22);
+    this.ring(x, y + 0.15, z, 8 * k, 0.45);
+    this.stage.pointFlash(x, y + 1.5, z, 90 * k, 0.25);
   }
 
-  ring(x, y, z, r, dur) {
+  // Sis perdesi: tankın etrafında yoğun beyaz duman
+  smokeScreen(x, y, z, r, dur) {
+    for (let i = 0; i < 34; i++) {
+      const a = rand(0, TAU), d = Math.sqrt(Math.random()) * r;
+      this.alpha.add(x + Math.cos(a) * d * 0.3, y + rand(0.5, 1.5), z + Math.sin(a) * d * 0.3, Math.cos(a) * d * 1.4, rand(0.2, 0.8), Math.sin(a) * d * 1.4, dur * rand(0.75, 1.05), 2, rand(7, 10), SMOKE_W, [0.86, 0.86, 0.86], 0.9, 0, 1, 1.6, -0.02);
+    }
+    for (let i = 0; i < 8; i++) this.add.add(x, y + 1.6, z, rand(-6, 6), rand(3, 6), rand(-6, 6), 0.3, 0.8, 0.2, SPARK, FIRE1, 1, 0, 3, 0, 9);
+  }
+
+  ring(x, y, z, r, dur, op = 0.8) {
     const rr = this.rings.find(q => !q.m.visible) || this.rings[0];
     rr.m.visible = true;
     rr.m.position.set(x, y, z);
     rr.t = dur;
     rr.max = dur;
     rr.r = r;
+    rr.op = op;
   }
 
   dust(x, y, z, amount, vx = 0, vz = 0) {
     const dc = this.dustColor;
-    this.alpha.add(x + rand(-0.3, 0.3), y + 0.15, z + rand(-0.3, 0.3), vx + rand(-0.6, 0.6), rand(0.3, 1.1), vz + rand(-0.6, 0.6), rand(0.7, 1.3), 0.6 * amount, 2.4 * amount, dc, dc, 0.32 * Math.min(1, amount), 0, 1, 1.8);
+    this.alpha.add(x + rand(-0.3, 0.3), y + 0.15, z + rand(-0.3, 0.3), vx + rand(-0.6, 0.6), rand(0.3, 1.1), vz + rand(-0.6, 0.6), rand(0.8, 1.5), 0.7 * amount, 2.8 * amount, dc, dc, 0.34 * Math.min(1, amount), 0, 1, 1.8);
+  }
+
+  splash(x, y, z, amount) {
+    for (let i = 0; i < 2; i++) this.alpha.add(x + rand(-0.4, 0.4), y + 0.1, z + rand(-0.4, 0.4), rand(-1, 1), rand(1.5, 3.5), rand(-1, 1), rand(0.5, 0.9), 0.3, 1.1 * amount, [0.9, 0.95, 1], [0.85, 0.9, 0.95], 0.7, 0, 1, 0.5, 9);
   }
 
   exhaust(x, y, z, dx, dz, heavy) {
-    this.alpha.add(x, y, z, dx * 1.5 + rand(-0.3, 0.3), rand(0.6, 1.2), dz * 1.5 + rand(-0.3, 0.3), rand(0.6, 1.1), 0.3, heavy ? 1.8 : 1.1, SMOKE_D, SMOKE_L, heavy ? 0.4 : 0.22, 0, 1, 1.5, -0.3);
+    this.alpha.add(x, y, z, dx * 1.5 + rand(-0.3, 0.3), rand(0.6, 1.2), dz * 1.5 + rand(-0.3, 0.3), rand(0.7, 1.3), 0.3, heavy ? 2 : 1.2, SMOKE_D, SMOKE_L, heavy ? 0.48 : 0.24, 0, 1, 1.5, -0.3);
   }
 
   fire(x, y, z, k = 1) {
     this.add.add(x + rand(-0.6, 0.6), y + rand(0, 0.5), z + rand(-0.6, 0.6), rand(-0.3, 0.3), rand(1.5, 3), rand(-0.3, 0.3), rand(0.3, 0.6), rand(0.8, 1.4) * k, 0.2, FIRE0, EMBER, 0.9, 0, 2, 1);
-    if (Math.random() < 0.5) this.alpha.add(x + rand(-0.4, 0.4), y + 0.8, z + rand(-0.4, 0.4), rand(-0.4, 0.4), rand(1.5, 2.5), rand(-0.4, 0.4), rand(1.8, 3), 1, 4.5 * k, [0.08, 0.08, 0.08], [0.35, 0.34, 0.33], 0.6, 0, 1, 0.5, -0.4);
+    if (Math.random() < 0.5) this.alpha.add(x + rand(-0.4, 0.4), y + 0.8, z + rand(-0.4, 0.4), rand(-0.4, 0.4), rand(1.5, 2.5), rand(-0.4, 0.4), rand(2, 3.4), 1, 5 * k, [0.07, 0.07, 0.07], [0.35, 0.34, 0.33], 0.65, 0, 1, 0.5, -0.4);
   }
 
   sparkle(x, y, z, color) {
@@ -304,24 +366,24 @@ export class FX {
     this.ring(x, y + 0.1, z, 4, 0.5);
   }
 
-  // mermi listesi: {x,y,z,vx,vz,heavy,own}
+  // mermiler: {x,y,z,vx,vy,vz,heavy,enemy}
   drawShells(list, trail) {
     const M = this.shellMesh;
     let i = 0;
     for (const s of list) {
       if (i >= 160) break;
-      const sp = Math.hypot(s.vx, s.vz) || 1;
-      this.v.set(s.vx / sp, 0, s.vz / sp);
+      const sp = Math.hypot(s.vx, s.vy, s.vz) || 1;
+      this.v.set(s.vx / sp, s.vy / sp, s.vz / sp);
       this.q.setFromUnitVectors(this.xAxis, this.v);
-      const w = s.heavy ? 0.2 : 0.13;
-      this.m4.compose(this.s.set(s.x, s.y, s.z), this.q, this.sc.set(s.heavy ? 1.1 : 0.8, w, w));
+      const w = s.heavy ? 0.12 : 0.09;
+      this.m4.compose(this.s.set(s.x, s.y, s.z), this.q, this.sc.set(2.4, w, w));
       M.setMatrixAt(i, this.m4);
-      this.c.set(s.enemy ? '#ff7a45' : s.heavy ? '#ffd07a' : '#fff0b8');
+      this.c.set(s.he ? '#ffb36a' : s.enemy ? '#ff8a55' : '#fff2c4');
       M.setColorAt(i, this.c);
       i++;
       if (trail) {
-        this.add.add(s.x, s.y, s.z, 0, 0, 0, 0.12, s.heavy ? 1.2 : 0.8, 0.2, s.enemy ? [1, 0.45, 0.2] : [1, 0.8, 0.45], [0.8, 0.3, 0.05], 0.7, 0, 0);
-        if (Math.random() < 0.35) this.alpha.add(s.x, s.y, s.z, 0, 0.3, 0, 0.5, 0.25, 0.7, SMOKE_L, SMOKE_L, 0.25, 0, 1, 1);
+        this.add.add(s.x, s.y, s.z, 0, 0, 0, 0.1, s.heavy ? 1.2 : 0.9, 0.3, s.enemy ? [1, 0.5, 0.25] : [1, 0.85, 0.5], [0.8, 0.3, 0.05], 0.8, 0, 0);
+        if (Math.random() < 0.5) this.alpha.add(s.x, s.y, s.z, 0, 0.3, 0, 0.9, 0.25, 0.9, SMOKE_W, SMOKE_L, 0.28, 0, 1, 1);
       }
     }
     M.count = i;
@@ -353,7 +415,7 @@ export class FX {
       const p = 1 - r.t / r.max;
       const s = r.r * (0.2 + p * 0.9);
       r.m.scale.set(s, 1, s);
-      r.m.material.opacity = (1 - p) * 0.8;
+      r.m.material.opacity = (1 - p) * (r.op || 0.8);
     }
   }
 }

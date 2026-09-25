@@ -17,7 +17,7 @@ const SECS = +(process.env.SECS || 60);
   await page.addInitScript(s => localStorage.setItem('siper_settings', s), JSON.stringify(settings));
   await page.goto('http://localhost:8182/index.html?autoplay=1');
   await sleep(1500);
-  await page.click('[data-go=solo]');
+  await page.click('#playBtn');
   await page.click('#soloStart');
   for (let t = 0; t < SECS; t += 10) {
     await sleep(10000);

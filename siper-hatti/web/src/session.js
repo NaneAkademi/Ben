@@ -1,5 +1,5 @@
 // Oda (lobi) yönetimi: oyuncu listesi, maç ayarları, maçı başlatma, geç katılanlar.
-import { PROTOCOL, MAX_PLAYERS, PLAYER_COLORS, BOT_NAMES, BOT_COLORS, THEME_LIST } from './config.js';
+import { PROTOCOL, MAX_PLAYERS, PLAYER_COLORS, BOT_NAMES, BOT_COLORS, THEME_LIST, CLASS_LIST } from './config.js';
 import { cleanName } from './util.js';
 
 export class Session {
@@ -21,8 +21,8 @@ export class Session {
     net.on('lost', reason => !this.closed && app.connectionLost(reason));
   }
 
-  hostSetup(name, color) {
-    this.players = [{ id: 1, name, color, ready: true, peer: null }];
+  hostSetup(name, color, tank) {
+    this.players = [{ id: 1, name, color, tank: CLASS_LIST.includes(tank) ? tank : 'medium', ready: true, peer: null }];
   }
 
   // ---------- ağ mesajları ----------
@@ -78,7 +78,8 @@ export class Session {
       const free = PLAYER_COLORS.find(c => !this.players.some(p => p.color === c.hex));
       if (free) color = free.hex;
     }
-    const p = { id: this.nextId++, name: cleanName(m.name) || 'Oyuncu', color, ready: false, peer };
+    const tank = CLASS_LIST.includes(m.tank) ? m.tank : 'medium';
+    const p = { id: this.nextId++, name: cleanName(m.name) || 'Oyuncu', color, tank, ready: false, peer };
     this.players.push(p);
     this.net.sendTo(peer, { t: 'welcome', id: p.id });
     this.pushLobby();
@@ -111,7 +112,7 @@ export class Session {
   }
 
   publicPlayers() {
-    return this.players.map(({ id, name, color, ready }) => ({ id, name, color, ready }));
+    return this.players.map(({ id, name, color, tank, ready }) => ({ id, name, color, tank, ready }));
   }
 
   pushLobby() {
@@ -147,7 +148,7 @@ export class Session {
     const bots = [];
     if (cfg.mode === 'dm') {
       const names = BOT_NAMES.slice().sort(() => Math.random() - 0.5);
-      for (let i = 0; i < cfg.bots; i++) bots.push({ id: 100 + i, name: names[i % names.length], color: BOT_COLORS[i % BOT_COLORS.length] });
+      for (let i = 0; i < cfg.bots; i++) bots.push({ id: 100 + i, name: names[i % names.length], color: BOT_COLORS[i % BOT_COLORS.length], tank: CLASS_LIST[(Math.random() * 3) | 0] });
     }
     const msg = { t: 'start', cfg, seed, players: this.publicPlayers(), bots, spawns };
     this.lastStart = msg;

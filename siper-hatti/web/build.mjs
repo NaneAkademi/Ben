@@ -12,8 +12,8 @@ fs.mkdirSync(path.join(dist, 'fonts'), { recursive: true });
 
 // Yazı tipleri (Türkçe karakterler için latin + latin-ext)
 const fonts = [
-  ['saira-stencil-one', 'Saira Stencil One', [400]],
-  ['barlow-condensed', 'Barlow Condensed', [500, 600, 700]],
+  ['rajdhani', 'Rajdhani', [500, 600, 700]],
+  ['teko', 'Teko', [500, 600]],
 ];
 let fontCss = '';
 for (const [pkg, family, weights] of fonts) {

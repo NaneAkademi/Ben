@@ -14,22 +14,32 @@ Her `siper-hatti/` değişikliğinde GitHub Actions APK'yı kendiliğinden derle
 - **Hayatta Kal (birlikte):** Kenarlardan gelen düşman tanklarına karşı dalgalar halinde savaş. Her 5. dalgada Komutan Tankı gelir. 1–4 kişi.
 - **Ölüm Maçı (karşı karşıya):** Herkes birbirine karşı; belirlenen vuruş sayısına ilk ulaşan kazanır. Boş yerleri botlar doldurabilir.
 - **Tek oyuncu:** Her iki mod da internetsiz, botlarla oynanabilir.
-- 3 harita teması (Çayır, Çöl, Kar), her maçta yeniden üretilen arazi: yıkık binalar, kum torbası siperleri, kayalar, ağaçlar, patlayan variller.
-- Bonuslar: onarım (yeşil), kalkan (mavi), seri atış (turuncu). Yetenekler: ağır mermi (alan hasarı) ve nitro.
-- Grafik: gölgeler, sis, gökyüzü, rüzgârda sallanan çimenler, kamuflajlı ayrıntılı tanklar, patlama/duman/kıvılcım efektleri, yüksek ayarda parlama (bloom). Kare hızı düşerse çözünürlük kendiliğinden ayarlanır.
-- Sesler anlık üretilir (motor, atış, patlama); titreşim desteği.
+- **Garaj:** 3 tank sınıfı — Çita (hafif, hızlı), Kurt (orta), Ayı (ağır, kalın zırh, yavaş doldurma). Kamuflaj renkleri seviye atladıkça açılır.
+- **Gerçekçi atış:** Mermiler yerçekimiyle eğrisel uçar, uçuş süresi vardır. Hareket halindeyken ve taret dönerken nişan dağılır;
+  durunca daire daralır. Zırh yüzeyi önemlidir: ön zırh kalın, yan ve arka zayıf; dik açıyla gelmeyen mermi sekebilir.
+- **Mühimmat ve ekipman:** ZD (zırh delici) ve YP (yüksek patlayıcı, alan hasarı) mermi, sis perdesi, tamir kiti.
+- **Haritalar:** Yeşil Vadi, Çöl Üssü, Kuzey Cephesi — her maçta yeniden üretilen arazi: köy evleri, ahırlar, konteyner yığınları,
+  gölet, yollar, tepeler, ağaçlar, kum torbası siperleri, tank tuzakları, patlayan variller.
+- **Tecrübe ve seviye:** Maç sonunda imha, hasar, dalga ve zafere göre TP kazanılır; istatistikler profilde tutulur.
+- Grafik: aydınlık gökyüzü ve çevre ışığı, gölgeler, rüzgârda sallanan çimenler, su yüzeyi, patlama/duman/kıvılcım efektleri,
+  yüksek ayarda parlama (bloom). Parlaklık ayarı vardır; kare hızı düşerse çözünürlük kendiliğinden ayarlanır.
+- Sesler anlık üretilir: dizel motor ve palet sesi, mesafeye göre gecikmeli ve yankılı top atışı, mermi ıslığı, sekme, zırh delinmesi;
+  titreşim desteği.
 
 ### Kontroller
 
-| | Dokunmatik | Klavye | Oyun kolu |
+| | Dokunmatik | Klavye / fare | Oyun kolu |
 |---|---|---|---|
-| Sürüş | Ekranın solunda sürükle | W A S D / oklar | Sol çubuk |
-| Ateş | ATEŞ tuşu (basılı tut) | Boşluk / sol tık | RT / A |
-| Ağır mermi | AĞIR MERMİ | E / sağ tık | B / RB |
-| Nitro | NİTRO | Shift | LB / X |
+| Sürüş | Sol joystick | W A S D / oklar | Sol çubuk |
+| Kamera ve taret | Ekranın sağ yarısında parmakla kaydır | Fare (tıklayınca kilitlenir) | Sağ çubuk |
+| Ateş | ATEŞ (basılıyken kaydırarak nişan alınabilir) | Boşluk / sol tık | RT / A |
+| Dürbün (yakınlaştır) | Nişangâh tuşu | Z / sol Shift / sağ tık | LT |
+| Mermi seçimi | ZD / YP | 1 / 2 | X / B |
+| Sis / Tamir | Sis ve anahtar tuşları | Q / R | LB / RB |
 | Menü | ❚❚ ya da geri tuşu | Esc | Start |
 
-Taret en yakın düşmana kendiliğinden nişan alır.
+Taret, kameranın baktığı yere döner; ekranın ortasındaki artı nişangâh, küçük daire ise namlunun gerçekte nereye baktığını gösterir.
+Ayarlar → Kontrol bölümünden hassasiyet, dikey eksen ters çevirme ve nişan yardımı değiştirilebilir.
 
 ## Çok oyunculu nasıl çalışıyor? (Sunucu gerekir mi?)
 
@@ -52,7 +62,7 @@ npm run dev          # http://localhost:8080 (değişiklikleri izler)
 ```
 
 Yerel eşleştirme sunucusuyla test: `npx peerjs --port 9000 --host 127.0.0.1` ve sayfayı `?peer=127.0.0.1:9000` ile aç.
-Otomatik testler (Playwright): `node test/smoke.cjs`, `node test/long.cjs`, `node test/multi.cjs`, `node test/layout.cjs`.
+Otomatik testler (Playwright): `node test/smoke.cjs`, `node test/long.cjs`, `node test/multi.cjs`, `node test/layout.cjs`, `node test/edge.cjs`.
 
 ### APK
 

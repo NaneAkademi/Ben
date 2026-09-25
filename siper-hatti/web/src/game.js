@@ -1,21 +1,21 @@
-// Maç mantığı: tanklar, mermiler, bonuslar, dalgalar, puanlar ve ağ senkronizasyonu.
+// Maç mantığı: tanklar, balistik mermiler, zırh, bonuslar, dalgalar, puanlar ve ağ senkronizasyonu.
 //
 // Yetki kuralları (herkesin ekranı tutarlı kalsın diye):
-//  - Her oyuncu kendi tankını yönetir ve KENDİSİNE gelen vuruşlara kendisi karar verir.
+//  - Her oyuncu kendi tankını yönetir ve KENDİSİNE gelen vuruşlara (hasar/sekme) kendisi karar verir.
 //  - Botlara isabet eden oyuncu mermisine atan oyuncu karar verir; bot mermileri oda sahibinde.
 //  - Botlar, bonuslar, variller, dalgalar ve skor oda sahibinin (host) cihazında yönetilir.
 import * as THREE from 'three';
 import {
-  TYPES, TYPE_LIST, ABILITY, PICKUPS, PICKUP_LIST, BARREL, INTERP_DELAY, SNAP_HZ,
-  ENEMY_COLORS, THEMES, ARENA,
+  TYPES, TYPE_LIST, AMMO, CONSUMABLES, CAMERA, PICKUPS, PICKUP_LIST, BARREL, INTERP_DELAY, SNAP_HZ,
+  ENEMY_COLORS, THEMES, ARENA, GRAVITY, CLASS_LIST,
 } from './config.js';
 import { World } from './world.js';
-import { TankView } from './tankModel.js';
+import { TankView, modelInfo } from './tankModel.js';
 import { Brain } from './ai.js';
 import { sfx } from './audio.js';
-import { clamp, lerp, angDiff, turnTo, lerpAng, damp, rand, segCircle, num, TAU } from './util.js';
+import { clamp, lerp, angDiff, turnTo, lerpAng, damp, rand, segCircle, num, TAU, solveElev, ELEV_MIN, ELEV_MAX } from './util.js';
 
-const TV1 = new THREE.Vector3(), TV2 = new THREE.Vector3();
+const TV1 = new THREE.Vector3(), TV2 = new THREE.Vector3(), TV3 = new THREE.Vector3();
 const q2 = v => Math.round(v * 100);
 const q3 = v => Math.round(v * 1000);
 const DIFF = [
@@ -23,6 +23,48 @@ const DIFF = [
   { hp: 1, dmg: 1 },
   { hp: 1.25, dmg: 1.25 },
 ];
+// 3B parça - yönlendirilmiş kutu (tank gövdesi) kesişimi. Yüz: 0 ön, 1 yan, 2 arka, 3 üst
+function segTank(t, x0, y0, z0, x1, y1, z1) {
+  const c = Math.cos(t.a), s = Math.sin(t.a);
+  const base = t.baseY;
+  const ax = (x0 - t.x) * c + (z0 - t.z) * s, az = -(x0 - t.x) * s + (z0 - t.z) * c, ay = y0 - base;
+  const bx = (x1 - t.x) * c + (z1 - t.z) * s, bz = -(x1 - t.x) * s + (z1 - t.z) * c, by = y1 - base;
+  const d = [bx - ax, by - ay, bz - az], o = [ax, ay, az];
+  const lo = [-t.hl, 0, -t.hw], hi = [t.hl, t.hh, t.hw];
+  let tmin = 0, tmax = 1, axis = -1, sign = 1;
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]) < 1e-9) {
+      if (o[i] < lo[i] || o[i] > hi[i]) return null;
+      continue;
+    }
+    let t1 = (lo[i] - o[i]) / d[i], t2 = (hi[i] - o[i]) / d[i], sg = -1;
+    if (t1 > t2) {
+      [t1, t2] = [t2, t1];
+      sg = 1;
+    }
+    if (t1 > tmin) {
+      tmin = t1;
+      axis = i;
+      sign = sg;
+    }
+    tmax = Math.min(tmax, t2);
+    if (tmin > tmax) return null;
+  }
+  if (axis < 0) axis = 2;
+  const len = Math.hypot(d[0], d[1], d[2]) || 1;
+  let face, cosI;
+  if (axis === 0) {
+    face = sign > 0 ? 0 : 2;
+    cosI = Math.abs(d[0]) / len;
+  } else if (axis === 2) {
+    face = 1;
+    cosI = Math.abs(d[2]) / len;
+  } else {
+    face = 3;
+    cosI = Math.abs(d[1]) / len;
+  }
+  return { t: tmin, face, cosI };
+}
 
 class Tank {
   constructor(game, o) {
@@ -39,18 +81,13 @@ class Tank {
     this.dmgMul = o.dmgMul || 1;
     this.alive = false;
     this.seen = false;
-    this.x = 0;
-    this.z = 0;
-    this.a = 0;
-    this.ta = 0;
+    this.x = this.z = this.a = this.ta = this.elev = 0;
     this.speed = 0;
-    this.vx = 0;
-    this.vz = 0;
+    this.vx = this.vz = 0;
     this.reload = 0;
-    this.heCd = 0;
-    this.boostCd = 0;
-    this.boostT = 0;
-    this.shieldT = 0;
+    this.ammo = 'ap';
+    this.smokeCd = 0;
+    this.repairCd = 0;
     this.rapidT = 0;
     this.protT = 0;
     this.respawnT = 0;
@@ -63,7 +100,20 @@ class Tank {
     this.exT = rand(0, 0.3);
     this.fireT = 0;
     this.lo = 1;
-    this.view = new TankView(game.stage, o.type, this.spec.model, o.color, this.spec.scale);
+    this.disp = this.spec.disp * 3;
+    this.turnRate = 0;
+    this.turretRate = 0;
+    const info = modelInfo(this.spec.model);
+    const sc = this.spec.scale;
+    this.hl = (info.len / 2) * sc;
+    this.hw = (info.width / 2) * sc;
+    this.hh = info.height * sc;
+    this.gunH = info.gunH * sc;
+    this.gunX = info.gunX * sc;
+    this.pivotX = info.pivotX * sc;
+    this.muzzleLen = info.muzzle * sc;
+    this.baseY = 0;
+    this.view = new TankView(game.stage, o.type, this.spec.model, o.color, sc);
     this.view.root.visible = false;
   }
   get r() {
@@ -93,7 +143,8 @@ export class Game {
     this.shells = [];
     this.pickups = new Map();
     this.scores = new Map();
-    this.ended = new Map(); // bitmiş mermiler (efekt tekrarı olmasın)
+    this.smokes = [];
+    this.ended = new Map();
     this.directHits = new Set();
     this.time = 0;
     this.sendT = 0;
@@ -104,7 +155,9 @@ export class Game {
     this.enemiesLeft = 0;
     this.timeLeft = (start.cfg.time || 0) * 60;
     this.shake = 0;
-    this.cam = { yaw: 0, pos: new THREE.Vector3(), look: new THREE.Vector3(), init: false, fov: 0 };
+    this.stats = { shots: 0, hits: 0, dmg: 0, kills: 0, taken: 0 };
+    this.cam = { yaw: 0, pitch: CAMERA.pitch, zoom: false, pos: new THREE.Vector3(), init: false, fov: 0, dist: CAMERA.dist };
+    this.aim = { x: 0, y: 0, z: 0, target: null, marker: null };
     this.botInfo = new Map((start.bots || []).map(b => [b.id, b]));
 
     for (const p of start.players) this.addPlayer(p);
@@ -117,19 +170,20 @@ export class Game {
     }
 
     if (this.isHost) this.hostInit();
-    const spawn = start.spawns && start.spawns[this.myId];
-    this.spawnMe(spawn);
+    this.spawnMe(start.spawns && start.spawns[this.myId]);
     this.ui.startHud(this);
     sfx.engineStart();
-    if (this.mode === 'coop') this.ui.banner(this.wave ? 'Dalga ' + this.wave : 'Hazırlan!', 'Düşman dalgalarına karşı dayan', 2.2);
-    else this.ui.banner('Ölüm Maçı', `${this.cfg.limit} vuruşa ilk ulaşan kazanır`, 2.2);
+    sfx.ambienceStart(1);
+    if (this.mode === 'coop') this.ui.banner(this.wave ? 'Dalga ' + this.wave : 'Hazırlan!', 'Düşman dalgalarına karşı dayan', 2.4);
+    else this.ui.banner('Ölüm Maçı', `${this.cfg.limit} vuruşa ilk ulaşan kazanır`, 2.4);
   }
 
   // ---------- oyuncu / bot kayıtları ----------
   addPlayer(p) {
     if (this.tanks.has(p.id)) return this.tanks.get(p.id);
+    const type = CLASS_LIST.includes(p.tank) ? p.tank : 'medium';
     const t = new Tank(this, {
-      id: p.id, kind: 'player', type: 'player', name: p.name, color: p.color,
+      id: p.id, kind: 'player', type, name: p.name, color: p.color,
       team: this.mode === 'coop' ? 1 : p.id, local: p.id === this.myId,
     });
     this.tanks.set(p.id, t);
@@ -139,10 +193,8 @@ export class Game {
 
   addBot(b) {
     if (this.tanks.has(b.id)) return this.tanks.get(b.id);
-    const t = new Tank(this, {
-      id: b.id, kind: 'bot', type: 'bot', name: b.name, color: b.color, team: b.id, local: this.isHost,
-      hpMul: 1, dmgMul: 1,
-    });
+    const type = CLASS_LIST.includes(b.tank) ? b.tank : 'medium';
+    const t = new Tank(this, { id: b.id, kind: 'bot', type, name: b.name, color: b.color, team: b.id, local: this.isHost });
     this.tanks.set(b.id, t);
     if (!this.scores.has(b.id)) this.scores.set(b.id, { k: 0, d: 0, s: 0 });
     if (this.isHost) {
@@ -156,15 +208,13 @@ export class Game {
   addEnemy(id, type) {
     const np = this.playerCount();
     const t = new Tank(this, {
-      id, kind: 'enemy', type, name: { light: 'Hafif', medium: 'Orta', heavy: 'Ağır', boss: 'KOMUTAN' }[type],
-      color: ENEMY_COLORS[type], team: 2, local: this.isHost,
+      id, kind: 'enemy', type, name: TYPES[type].name, color: ENEMY_COLORS[type], team: 2, local: this.isHost,
       hpMul: this.diff.hp * (1 + 0.28 * (np - 1)), dmgMul: this.diff.dmg,
     });
     this.tanks.set(id, t);
     if (this.isHost) {
       t.brain = new Brain(this, t, this.cfg.diff);
-      // ilk dalgalarda düşmanlar daha az isabetli
-      t.brain.extraErr = Math.max(0, 0.06 - this.wave * 0.012);
+      t.brain.extraErr = Math.max(0, 0.05 - this.wave * 0.01);
     }
     return t;
   }
@@ -178,10 +228,7 @@ export class Game {
 
   setRoster(players) {
     const ids = new Set(players.map(p => p.id));
-    for (const p of players) {
-      const t = this.addPlayer(p);
-      t.name = p.name;
-    }
+    for (const p of players) this.addPlayer(p).name = p.name;
     for (const t of [...this.tanks.values()]) if (t.kind === 'player' && !ids.has(t.id) && t.id !== this.myId) {
       this.ui.feedText(`${t.name} oyundan ayrıldı`);
       this.removeTank(t.id);
@@ -199,18 +246,21 @@ export class Game {
     t.z = s.z;
     t.a = s.a;
     t.ta = s.a;
+    t.elev = 0;
     t.speed = 0;
     t.vx = t.vz = 0;
     t.hp = t.maxHp;
     t.alive = true;
     t.seen = true;
     t.deadT = 99;
-    t.reload = 0.5;
+    t.reload = 0.8;
     t.buf = [];
+    t.disp = t.spec.disp * 3;
+    t.baseY = this.world.height(s.x, s.z);
     t.view.revive();
     t.view.root.visible = true;
     t.view.lastA = null;
-    this.fx.spawnFx(s.x, this.world.height(s.x, s.z), s.z, t.color);
+    this.fx.spawnFx(s.x, t.baseY, s.z, t.color);
   }
 
   bestSpawn(t) {
@@ -237,11 +287,13 @@ export class Game {
     } else s = idx != null ? this.world.spawns[idx % this.world.spawns.length] : this.bestSpawn(m);
     this.placeAtSpawn(m, s);
     m.protT = this.mode === 'dm' ? 2.5 : 1.5;
-    m.shieldT = m.rapidT = m.boostT = 0;
-    m.heCd = 2;
+    m.rapidT = 0;
+    this.cam.yaw = s.a;
+    this.cam.pitch = CAMERA.pitch;
     this.cam.init = false;
+    this.cam.zoom = false;
     this.ui.dead(false);
-    this.sendState(true);
+    this.sendState();
   }
 
   // ---------- ağ yardımcıları ----------
@@ -260,9 +312,58 @@ export class Game {
     return a.team !== b.team;
   }
 
+  // ---------- oyuncu eylemleri ----------
+  action(name) {
+    const m = this.me;
+    if (!m) return;
+    if (name === 'zoom') {
+      if (m.alive) this.cam.zoom = !this.cam.zoom;
+      return;
+    }
+    if (!m.alive || this.over) return;
+    if (name === 'ap' || name === 'he') {
+      if (m.ammo !== name) {
+        m.ammo = name;
+        m.reload = Math.max(m.reload, m.spec.reload * 0.6);
+        this.ui.hitInfo(AMMO[name].name + ' yükleniyor', 'info');
+        sfx.click();
+      }
+    } else if (name === 'ammo') this.action(m.ammo === 'ap' ? 'he' : 'ap');
+    else if (name === 'smoke' && m.smokeCd <= 0) {
+      m.smokeCd = CONSUMABLES.smoke.cd;
+      const msg = { t: 'smoke', o: m.id, x: q2(m.x), z: q2(m.z) };
+      this.onSmoke(msg);
+      this.emit(msg);
+    } else if (name === 'repair' && m.repairCd <= 0 && m.hp < m.maxHp) {
+      m.repairCd = CONSUMABLES.repair.cd;
+      m.hp = Math.min(m.maxHp, m.hp + CONSUMABLES.repair.heal);
+      sfx.repair();
+      this.ui.hitInfo('+' + CONSUMABLES.repair.heal + ' ONARIM', 'good');
+      this.sendState();
+    }
+  }
+
+  onSmoke(m) {
+    const x = num(m.x) / 100, z = num(m.z) / 100;
+    const C = CONSUMABLES.smoke;
+    this.smokes.push({ x, z, r: C.r, until: this.time + C.dur });
+    this.fx.smokeScreen(x, this.world.height(x, z), z, C.r, C.dur);
+    if (m.o === this.myId) sfx.smoke();
+  }
+
+  smokeBlocks(x0, z0, x1, z1) {
+    for (const s of this.smokes) if (s.until > this.time && segCircle(x0, z0, x1, z1, s.x, s.z, s.r * 0.85) >= 0) return true;
+    return false;
+  }
+  inSmoke(x, z) {
+    for (const s of this.smokes) if (s.until > this.time && Math.hypot(x - s.x, z - s.z) < s.r * 0.9) return true;
+    return false;
+  }
+
   // ---------- ana döngü ----------
   update(dt) {
     this.time += dt;
+    this.updateCameraInput();
     const inp = this.app.input.state();
     this.updateMe(dt, inp);
     if (this.isHost) this.hostUpdate(dt);
@@ -276,29 +377,41 @@ export class Game {
       this.sendState();
     }
     this.updateCamera(dt);
+    this.updateGunMarker();
     this.ui.hudTick(this, dt);
     for (const [k, t] of this.ended) if (this.time - t > 6) this.ended.delete(k);
     if (this.directHits.size > 200) this.directHits.clear();
+    if (this.smokes.length) this.smokes = this.smokes.filter(s => s.until > this.time);
   }
 
-  sendState(force) {
+  sendState() {
     if (this.isHost || !this.me) return;
     const m = this.me;
-    this.session.send({ t: 'st', s: [q2(m.x), q2(m.z), q3(m.a), q3(m.ta), Math.max(0, Math.round(m.hp)), this.flagsOf(m)] });
+    this.session.send({ t: 'st', s: [q2(m.x), q2(m.z), q3(m.a), q3(m.ta), q3(m.elev), Math.max(0, Math.round(m.hp)), this.flagsOf(m)] });
   }
 
   flagsOf(t) {
-    return (t.alive ? 1 : 0) | (t.shieldT > 0 ? 2 : 0) | (t.boostT > 0 ? 4 : 0) | (t.rapidT > 0 ? 8 : 0) | (t.protT > 0 ? 16 : 0);
+    return (t.alive ? 1 : 0) | (t.rapidT > 0 ? 8 : 0) | (t.protT > 0 ? 16 : 0);
   }
 
   timers(t, dt) {
+    const was = t.reload;
     t.reload -= dt;
-    t.heCd -= dt;
-    t.boostCd -= dt;
-    t.boostT -= dt;
-    t.shieldT -= dt;
+    t.smokeCd -= dt;
+    t.repairCd -= dt;
     t.rapidT -= dt;
     t.protT -= dt;
+    if (t === this.me && was > 0 && t.reload <= 0 && t.alive) sfx.reload();
+  }
+
+  updateCameraInput() {
+    const c = this.cam;
+    const look = this.app.input.consumeLook();
+    const zf = c.zoom ? 0.28 : 1;
+    c.yaw += look.dx * zf;
+    c.pitch = clamp(c.pitch + look.dy * zf, c.zoom ? -0.35 : CAMERA.minPitch, CAMERA.maxPitch);
+    if (c.yaw > Math.PI) c.yaw -= TAU;
+    else if (c.yaw < -Math.PI) c.yaw += TAU;
   }
 
   updateMe(dt, inp) {
@@ -312,31 +425,43 @@ export class Game {
         this.ui.dead(true, Math.ceil(m.respawnT));
         if (m.respawnT <= 0) this.spawnMe();
       }
-      sfx.engineSet(0, false);
+      sfx.engineSet(0, 0, false, 0, dt);
       return;
     }
+    let fire = inp.fire;
+    let auto = null;
     if (this.app.autoplay) {
-      // test/demo: oyuncuyu yapay zekâ sürer (?autoplay=1)
       if (!this.autoBrain) this.autoBrain = new Brain(this, m, 2);
-      const c = this.autoBrain.update(dt);
-      inp = { throttle: c.throttle, steer: c.steer, fire: c.fire, he: Math.random() < 0.01, boost: Math.random() < 0.005 };
+      auto = this.autoBrain.update(dt);
+      inp = { throttle: auto.throttle, steer: auto.steer };
+      fire = auto.fire;
+      if (auto.aim != null) this.cam.yaw = lerpAng(this.cam.yaw, auto.aim, damp(5, dt));
     }
-    if (this.over) inp = { throttle: 0, steer: 0, fire: false, he: false, boost: false };
+    if (this.over) {
+      inp = { throttle: 0, steer: 0 };
+      fire = false;
+    }
+    const pa = m.a;
     this.drive(m, inp.throttle, inp.steer, dt);
-    const tg = this.pickTarget(m);
-    m.target = tg;
-    const aim = tg ? this.leadAim(m, tg) : m.a;
-    m.ta = turnTo(m.ta, aim, m.spec.turret * dt);
-    if (inp.fire && m.reload <= 0) this.fire(m, false);
-    if (inp.he && m.heCd <= 0) {
-      this.fire(m, true);
-      m.heCd = ABILITY.heCooldown;
+    m.turnRate = angDiff(pa, m.a) / Math.max(dt, 1e-3);
+
+    // nişan: kameranın gösterdiği nokta
+    this.computeAim();
+    const A = this.aim;
+    const gx = m.x + Math.cos(m.a) * m.gunX, gz = m.z + Math.sin(m.a) * m.gunX;
+    let wantYaw = Math.atan2(A.z - gz, A.x - gx);
+    let wantElev = solveElev(Math.hypot(A.x - gx, A.z - gz) - m.pivotX, A.y - (m.baseY + m.gunH), m.spec.shell);
+    if (auto && auto.aim != null) {
+      wantYaw = auto.aim;
+      wantElev = auto.elev ?? wantElev;
     }
-    if (inp.boost && m.boostCd <= 0) {
-      m.boostT = ABILITY.boostTime;
-      m.boostCd = ABILITY.boostCooldown;
-      sfx.boost();
-    }
+    const pta = m.ta;
+    m.ta = turnTo(m.ta, wantYaw, m.spec.turret * dt);
+    m.turretRate = Math.abs(angDiff(pta, m.ta)) / Math.max(dt, 1e-3);
+    m.elev += clamp(wantElev - m.elev, -m.spec.elev * dt, m.spec.elev * dt);
+    this.updateDispersion(m, dt);
+
+    if (fire && m.reload <= 0) this.fire(m);
     for (const p of this.pickups.values()) {
       if (p.claimed) continue;
       if (Math.hypot(p.x - m.x, p.z - m.z) < m.r + 1.4) {
@@ -345,18 +470,34 @@ export class Game {
         else this.session.send({ t: 'pick', id: p.id });
       }
     }
-    sfx.engineSet(Math.abs(m.speed) / m.spec.speed, true);
+    sfx.engineSet(Math.abs(m.speed) / m.spec.speed, Math.abs(inp.throttle), true, m.turretRate / m.spec.turret, dt);
+  }
+
+  // Sapma (isabet dağılımı): hareket, dönüş ve atış büyütür; durunca toplanır
+  updateDispersion(t, dt) {
+    const s = t.spec;
+    const target = s.disp * (1 + (Math.abs(t.speed) / s.speed) * 2.2 + Math.min(1.5, Math.abs(t.turnRate) / s.turn) * 1.2 + Math.min(1.5, t.turretRate / s.turret) * 1.0);
+    if (target > t.disp) t.disp = lerp(t.disp, target, damp(12, dt));
+    else t.disp = target + (t.disp - target) * Math.exp((-dt * 2.3) / s.aimTime);
   }
 
   drive(t, thr, st, dt) {
-    const s = t.spec, boost = t.boostT > 0 ? ABILITY.boostMul : 1;
+    const s = t.spec;
     thr = clamp(thr, -1, 1);
     st = clamp(st, -1, 1);
-    const target = thr >= 0 ? thr * s.speed * boost : thr * s.rev;
-    const accel = Math.abs(target) > Math.abs(t.speed) && (t.speed === 0 || Math.sign(target) === Math.sign(t.speed)) ? 10 * boost : 22;
+    const ca = Math.cos(t.a), sa = Math.sin(t.a);
+    // yokuş yukarı yavaşlar, aşağı hızlanır
+    const hf = this.world.height(t.x + ca * 2, t.z + sa * 2), hb = this.world.height(t.x - ca * 2, t.z - sa * 2);
+    const slope = (hf - hb) / 4;
+    let target = thr >= 0 ? thr * s.speed : thr * s.rev;
+    target *= clamp(1 - slope * Math.sign(target) * 2.5, 0.55, 1.15);
+    let accel;
+    if (thr === 0) accel = 4;
+    else if (Math.sign(target) === Math.sign(t.speed) || Math.abs(t.speed) < 0.2) accel = Math.abs(target) > Math.abs(t.speed) ? s.accel : s.accel * 1.6;
+    else accel = s.accel * 2.4;
     t.speed += clamp(target - t.speed, -accel * dt, accel * dt);
     const rev = t.speed < -0.4 || thr < -0.25;
-    t.a += (rev ? -st : st) * s.turn * dt * (1 - 0.25 * Math.min(1, Math.abs(t.speed) / s.speed));
+    t.a += (rev ? -st : st) * s.turn * dt * (1 - 0.35 * Math.min(1, Math.abs(t.speed) / s.speed));
     if (t.a > Math.PI) t.a -= TAU;
     else if (t.a < -Math.PI) t.a += TAU;
     const px = t.x, pz = t.z;
@@ -366,7 +507,7 @@ export class Game {
     this.world.collide(t, t.r * 0.88);
     for (const o of this.tanks.values()) {
       if (o === t || !o.alive || !o.seen) continue;
-      const dx = t.x - o.x, dz = t.z - o.z, mm = (t.r + o.r) * 0.82, d2 = dx * dx + dz * dz;
+      const dx = t.x - o.x, dz = t.z - o.z, mm = (t.r + o.r) * 0.85, d2 = dx * dx + dz * dz;
       if (d2 < mm * mm) {
         const d = Math.sqrt(d2) || 0.01, k = (mm - d) / d;
         if (o.local && o !== this.me) {
@@ -382,232 +523,372 @@ export class Game {
       }
     }
     this.world.collide(t, t.r * 0.88);
-    if (t.bumped) t.speed *= Math.pow(0.1, dt);
+    if (t.bumped) t.speed *= Math.pow(0.08, dt);
     const k = damp(10, dt);
     t.vx = lerp(t.vx, (t.x - px) / Math.max(dt, 1e-3), k);
     t.vz = lerp(t.vz, (t.z - pz) / Math.max(dt, 1e-3), k);
+    t.baseY = this.world.height(t.x, t.z);
   }
 
-  pickTarget(m) {
-    let best = null, bs = 1e9;
-    const yaw = this.cam.yaw;
-    for (const o of this.tanks.values()) {
-      if (o === m || !o.alive || !o.seen || !this.hostile(m, o)) continue;
-      const dx = o.x - m.x, dz = o.z - m.z, d = Math.hypot(dx, dz);
-      if (d > m.spec.range) continue;
-      const off = Math.abs(angDiff(yaw, Math.atan2(dz, dx)));
-      let sc = d * (1 + off * 0.9);
-      if (!this.world.los(m.x, m.z, o.x, o.z)) sc += 30;
-      if (o === m.target) sc *= 0.75;
-      if (sc < bs) {
-        bs = sc;
-        best = o;
+  camDir(out) {
+    const c = this.cam;
+    return out.set(Math.cos(c.yaw) * Math.cos(c.pitch), -Math.sin(c.pitch), Math.sin(c.yaw) * Math.cos(c.pitch));
+  }
+
+  // Nişangâhın gösterdiği dünya noktası (+ isteğe bağlı nişan yardımı)
+  computeAim() {
+    const m = this.me, A = this.aim;
+    const o = this.stage.camera.position, d = this.camDir(TV1);
+    const hit = this.raycast(o.x, o.y, o.z, d.x, d.y, d.z, 260, m);
+    A.x = hit.x;
+    A.y = hit.y;
+    A.z = hit.z;
+    A.target = hit.tank && this.hostile(m, hit.tank) ? hit.tank : null;
+    A.dist = hit.dist;
+    A.assisted = false;
+    if (this.app.settings.assist && !A.target) {
+      let best = null, bestAng = ((this.cam.zoom ? 1.2 : 3.2) * Math.PI) / 180;
+      for (const t of this.tanks.values()) {
+        if (t === m || !t.alive || !t.seen || !this.hostile(m, t) || this.inSmoke(t.x, t.z)) continue;
+        const cx = t.x - o.x, cy = t.baseY + t.hh * 0.5 - o.y, cz = t.z - o.z;
+        const dist = Math.hypot(cx, cy, cz);
+        if (dist > m.spec.range * 1.3) continue;
+        const ang = Math.acos(clamp((cx * d.x + cy * d.y + cz * d.z) / dist, -1, 1)) - Math.atan(t.hw / dist);
+        if (ang < bestAng && this.world.los(m.x, m.z, t.x, t.z, 2)) {
+          bestAng = ang;
+          best = t;
+        }
+      }
+      if (best) {
+        const tt = Math.hypot(best.x - m.x, best.z - m.z) / m.spec.shell;
+        A.x = best.x + best.vx * tt * 0.8;
+        A.z = best.z + best.vz * tt * 0.8;
+        A.y = best.baseY + best.hh * 0.45;
+        A.target = best;
+        A.assisted = true;
       }
     }
-    return best;
   }
 
-  leadAim(m, o) {
-    let tx = o.x, tz = o.z;
-    for (let i = 0; i < 2; i++) {
-      const tt = Math.hypot(tx - m.x, tz - m.z) / m.spec.shell;
-      tx = o.x + o.vx * tt;
-      tz = o.z + o.vz * tt;
+  // Işın izleme: arazi, engeller ve tanklar
+  raycast(ox, oy, oz, dx, dy, dz, max, skip) {
+    const ex = ox + dx * max, ey = oy + dy * max, ez = oz + dz * max;
+    let best = 1, tank = null;
+    const oh = this.world.shellHit(ox, oy, oz, ex, ey, ez);
+    if (oh && oh.t < best) best = oh.t;
+    for (const t of this.tanks.values()) {
+      if (t === skip || !t.alive || !t.seen) continue;
+      const h = segTank(t, ox, oy, oz, ex, ey, ez);
+      if (h && h.t < best) {
+        best = h.t;
+        tank = t;
+      }
     }
-    return Math.atan2(tz - m.z, tx - m.x);
+    const W = this.world;
+    const steps = 90;
+    let prev = 0;
+    for (let i = 1; i <= steps; i++) {
+      const t = (i / steps) * best;
+      const x = ox + dx * max * t, y = oy + dy * max * t, z = oz + dz * max * t;
+      if (y < W.height(x, z)) {
+        let a = prev, b = t;
+        for (let k = 0; k < 6; k++) {
+          const mid = (a + b) / 2;
+          if (oy + dy * max * mid < W.height(ox + dx * max * mid, oz + dz * max * mid)) b = mid;
+          else a = mid;
+        }
+        best = b;
+        tank = null;
+        break;
+      }
+      prev = t;
+    }
+    return { x: ox + dx * max * best, y: oy + dy * max * best, z: oz + dz * max * best, dist: max * best, tank };
+  }
+
+  // Namlunun şu an vuracağı nokta (nişan halkası için)
+  updateGunMarker() {
+    const m = this.me;
+    if (!m || !m.alive) {
+      this.aim.marker = null;
+      return;
+    }
+    const mz = this.muzzle(m, m.ta, m.elev);
+    const v = m.spec.shell;
+    let x = mz.x, y = mz.y, z = mz.z, vx = mz.dx * v, vy = mz.dy * v, vz = mz.dz * v;
+    const dt = 0.035;
+    let hit = null;
+    for (let i = 0; i < 40 && !hit; i++) {
+      const x1 = x + vx * dt, y1 = y + vy * dt - 0.5 * GRAVITY * dt * dt, z1 = z + vz * dt;
+      vy -= GRAVITY * dt;
+      const c = this.collideSeg(x, y, z, x1, y1, z1, m.id, m.team);
+      if (c) hit = { x: x + (x1 - x) * c.t, y: y + (y1 - y) * c.t, z: z + (z1 - z) * c.t };
+      x = x1;
+      y = y1;
+      z = z1;
+    }
+    if (!hit) hit = { x, y, z };
+    this.aim.marker = { x: hit.x, y: hit.y, z: hit.z, dist: Math.hypot(hit.x - mz.x, hit.y - mz.y, hit.z - mz.z) };
+  }
+
+  // Namlu ağzı konumu ve yönü
+  muzzle(t, yaw, elev) {
+    const gx = t.x + Math.cos(t.a) * t.gunX + Math.cos(yaw) * t.pivotX;
+    const gz = t.z + Math.sin(t.a) * t.gunX + Math.sin(yaw) * t.pivotX;
+    const gy = t.baseY + t.gunH;
+    const ce = Math.cos(elev), se = Math.sin(elev);
+    const dx = Math.cos(yaw) * ce, dy = se, dz = Math.sin(yaw) * ce;
+    return { x: gx + dx * t.muzzleLen, y: gy + dy * t.muzzleLen, z: gz + dz * t.muzzleLen, dx, dy, dz, px: gx, pz: gz, py: gy };
   }
 
   // ---------- ateş ve mermiler ----------
-  fire(t, he) {
-    t.reload = t.spec.reload * (t.rapidT > 0 ? 0.5 : 1);
-    const n = ++t.seq;
+  fire(t) {
+    const he = t.ammo === 'he' || t.type === 'boss';
+    const A = he ? AMMO.he : AMMO.ap;
+    t.reload = t.spec.reload * A.reloadMul * (t.rapidT > 0 ? 0.6 : 1);
+    // dağılım dairesi içinde rastgele sapma
+    const r = t.disp * Math.sqrt(Math.random()), ang = Math.random() * TAU;
+    const yaw = t.ta + Math.cos(ang) * r, elev = clamp(t.elev + Math.sin(ang) * r * 0.7, ELEV_MIN - 0.02, ELEV_MAX + 0.02);
     let lo = 0;
     if (t.type === 'boss') {
       t.lo = -t.lo;
-      lo = t.lo * 0.29 * t.spec.scale;
+      lo = t.lo * 0.3 * t.spec.scale;
     }
-    const msg = { t: 'fire', o: t.id, n, x: q2(t.x), z: q2(t.z), a: q3(t.ta), he: he ? 1 : 0, lo: q2(lo) };
+    const mz = this.muzzle(t, yaw, elev);
+    const msg = { t: 'fire', o: t.id, n: ++t.seq, x: q2(mz.x - Math.sin(yaw) * lo), y: q2(mz.y), z: q2(mz.z + Math.cos(yaw) * lo), a: q3(yaw), e: q3(elev), he: he ? 1 : 0 };
     this.spawnShell(msg);
     this.emit(msg);
+    t.disp += t.spec.disp * 4;
+    if (t === this.me) this.stats.shots++;
   }
 
   spawnShell(m) {
     const t = this.tanks.get(m.o);
-    const x = num(m.x) / 100, z = num(m.z) / 100, a = num(m.a) / 1000, lo = num(m.lo) / 100;
-    const spec = t ? t.spec : TYPES.player;
-    const md = t ? t.view.muzzleDist : 3.6;
-    const c = Math.cos(a), s = Math.sin(a);
-    const he = !!m.he || (t && t.type === 'boss');
-    const speed = spec.shell * (m.he ? 0.85 : 1);
-    const sx = x + c * md - s * lo, sz = z + s * md + c * lo;
-    const hy = t ? (t.view.g.turretPos.y + t.view.g.barrelPos.y) * t.spec.scale : 1.35;
-    const shell = {
-      key: m.o + ':' + m.n, owner: m.o, team: t ? t.team : -1,
-      x: x - s * lo, z: z + c * lo, pre: md, vx: c * speed, vz: s * speed, dist: 0, max: spec.range,
-      dmg: m.he ? ABILITY.heDamage : spec.dmg * (t ? t.dmgMul : 1), he, heavy: he || spec.dmg > 20, enemy: t && t.kind === 'enemy',
-      hy, y: 0,
-    };
-    this.shells.push(shell);
-    const gy = this.world.height(sx, sz) + hy;
-    this.fx.muzzle(sx, gy, sz, c, s, shell.heavy);
+    const spec = t ? t.spec : TYPES.medium;
+    const x = num(m.x) / 100, y = num(m.y) / 100, z = num(m.z) / 100, a = num(m.a) / 1000, e = num(m.e) / 1000;
+    const he = !!m.he;
+    const v = spec.shell * (he ? 0.92 : 1);
+    const ce = Math.cos(e);
+    const dx = Math.cos(a) * ce, dy = Math.sin(e), dz = Math.sin(a) * ce;
+    const base = spec.dmg * (t ? t.dmgMul : 1);
+    this.shells.push({
+      key: m.o + ':' + m.n, owner: m.o, team: t ? t.team : -1, x, y, z, vx: dx * v, vy: dy * v, vz: dz * v,
+      life: 0, dmg: base * (he ? AMMO.he.dmgMul : 1), baseDmg: base, he, heavy: spec.dmg > 40 || he, enemy: !!(t && t.kind === 'enemy'), whiz: false,
+    });
+    this.fx.muzzle(x, y, z, dx, dy, dz, spec.dmg > 40, this.world.height(x, z));
     const mine = m.o === this.myId;
-    sfx.shot(sx, sz, shell.heavy, mine);
+    sfx.cannon(x, z, clamp(spec.dmg / 50, 0.3, 1), mine);
     if (t) {
-      t.view.kick();
-      if (t.alive && !t.seen) t.seen = true;
+      t.view.kick(angDiff(t.a, a), clamp(spec.dmg / 36, 0.6, 1.5));
+      if (!t.local) t.disp = spec.disp * 4;
     }
     if (mine) {
-      this.shake = Math.max(this.shake, m.he ? 0.35 : 0.18);
-      this.app.vibrate(m.he ? 35 : 18);
+      this.shake = Math.max(this.shake, spec.dmg > 40 ? 0.55 : 0.4);
+      this.app.vibrate(35);
+    } else {
+      const d = Math.hypot(x - this.cam.pos.x, z - this.cam.pos.z);
+      if (d < 25) this.shake = Math.max(this.shake, 0.25 * (1 - d / 25));
     }
   }
 
-  updateShells(dt) {
+  // parça boyunca en yakın çarpışma
+  collideSeg(x0, y0, z0, x1, y1, z1, owner, team) {
     const W = this.world;
+    let best = 2, res = null;
+    if (y1 < W.height(x1, z1)) {
+      let a = 0, b = 1;
+      for (let k = 0; k < 6; k++) {
+        const mid = (a + b) / 2;
+        if (y0 + (y1 - y0) * mid < W.height(x0 + (x1 - x0) * mid, z0 + (z1 - z0) * mid)) b = mid;
+        else a = mid;
+      }
+      best = b;
+      res = { t: b, kind: 'ground' };
+    }
+    const oh = W.shellHit(x0, y0, z0, x1, y1, z1);
+    if (oh && oh.t < best) {
+      best = oh.t;
+      res = { t: oh.t, kind: 'obs', o: oh.o };
+    }
+    for (const t of this.tanks.values()) {
+      if (!t.alive || !t.seen || t.id === owner || t.team === team) continue;
+      const h = segTank(t, x0, y0, z0, x1, y1, z1);
+      if (h && h.t < best) {
+        best = h.t;
+        res = { t: h.t, kind: 'tank', tank: t, face: h.face, cosI: h.cosI };
+      }
+    }
+    return res;
+  }
+
+  updateShells(dt) {
+    const m = this.me;
+    const steps = Math.max(1, Math.ceil(dt * 60));
+    const h = dt / steps;
     for (let i = this.shells.length - 1; i >= 0; i--) {
       const s = this.shells[i];
-      let step = Math.hypot(s.vx, s.vz) * dt;
-      let dx = s.vx * dt, dz = s.vz * dt;
-      if (s.pre) {
-        const k = (s.pre + step) / step;
-        dx *= k;
-        dz *= k;
-        step += s.pre;
-        s.pre = 0;
-      }
-      let end = false;
-      if (s.dist + step >= s.max) {
-        const k = Math.max(0, (s.max - s.dist) / step);
-        dx *= k;
-        dz *= k;
-        step *= k;
-        end = true;
-      }
-      const x1 = s.x + dx, z1 = s.z + dz;
-      let bt = 2, hitT = null, hitO = null;
-      const oh = W.shellHit(s.x, s.z, x1, z1);
-      if (oh) {
-        bt = oh.t;
-        hitO = oh.o;
-      }
-      for (const t of this.tanks.values()) {
-        if (!t.alive || !t.seen || t.id === s.owner || t.team === s.team) continue;
-        const tt = segCircle(s.x, s.z, x1, z1, t.x, t.z, t.r * 0.95);
-        if (tt >= 0 && tt < bt) {
-          bt = tt;
-          hitT = t;
-          hitO = null;
+      let done = false;
+      for (let k = 0; k < steps; k++) {
+        const x1 = s.x + s.vx * h, y1 = s.y + s.vy * h - 0.5 * GRAVITY * h * h, z1 = s.z + s.vz * h;
+        const c = this.collideSeg(s.x, s.y, s.z, x1, y1, z1, s.owner, s.team);
+        if (c) {
+          this.shellImpact(s, s.x + (x1 - s.x) * c.t, s.y + (y1 - s.y) * c.t, s.z + (z1 - s.z) * c.t, c);
+          done = true;
+          break;
         }
+        s.x = x1;
+        s.y = y1;
+        s.z = z1;
+        s.vy -= GRAVITY * h;
+        s.life += h;
       }
-      if (bt <= 1) {
-        this.shellImpact(s, s.x + dx * bt, s.z + dz * bt, hitT, hitO);
-        this.shells.splice(i, 1);
-        continue;
+      if (!done && m && m.alive && !s.whiz && s.owner !== m.id && s.team !== m.team && Math.hypot(s.x - m.x, s.z - m.z) < 7) {
+        s.whiz = true;
+        sfx.whiz(s.x, s.z);
       }
-      s.x = x1;
-      s.z = z1;
-      s.dist += step;
-      s.y = W.height(s.x, s.z) + s.hy - (s.dist / s.max) * 0.5;
-      if (end) {
-        this.shellImpact(s, s.x, s.z, null, null);
-        this.shells.splice(i, 1);
-      }
+      if (done || s.life > 3.2 || Math.abs(s.x) > ARENA + 80 || Math.abs(s.z) > ARENA + 80) this.shells.splice(i, 1);
     }
     this.fx.drawShells(this.shells, true);
   }
 
-  shellImpact(s, x, z, tank, obs) {
-    const y = this.world.height(x, z) + Math.min(s.hy, 1.3);
+  shellImpact(s, x, y, z, c) {
     this.ended.set(s.key, this.time);
     const auth = this.isAuthForShell(s);
-    if (tank) {
-      this.fx.impact(x, y, z, 'metal');
-      sfx.hit(x, z, tank.id === this.myId);
-      tank.view.hit();
+    if (c.kind === 'tank') {
+      const tank = c.tank;
       const decides = tank.kind === 'player' ? tank.id === this.myId : auth;
-      if (decides) this.applyHit(tank, s, x, z);
-    } else {
-      const kind = obs ? (obs.kind === 'rock' ? 'rock' : obs.kind === 'wall' || obs.kind === 'crate' ? 'wall' : obs.kind === 'barrel' ? 'metal' : 'ground') : 'ground';
-      this.fx.impact(x, obs ? y : this.world.height(x, z) + 0.2, z, kind);
-      sfx.thud(x, z);
-      if (!obs) this.stage.scorch(x, z, 0.7);
-      if (obs && obs.kind === 'barrel' && auth) {
-        if (this.isHost) this.hostBarrel(obs.bid, s.owner);
-        else this.session.send({ t: 'barrel', b: obs.bid, by: s.owner });
+      // dik açıyla gelmeyen zırh delici mermi sekebilir
+      const rico = !s.he && c.face !== 3 && c.cosI < 0.3;
+      if (rico) {
+        const sp = Math.hypot(s.vx, s.vy, s.vz) || 1;
+        this.fx.ricochet(x, y, z, (s.vx / sp) * 0.4 + rand(-0.4, 0.4), 0.5, (s.vz / sp) * 0.4 + rand(-0.4, 0.4));
+        sfx.ricochet(x, z);
+      } else {
+        this.fx.impact(x, y, z, 'metal');
+        sfx.metal(x, z, true, tank.id === this.myId);
       }
+      tank.view.hit(angDiff(tank.a, Math.atan2(s.vz, s.vx)));
+      if (decides) this.applyHit(tank, s, x, y, z, c, rico);
+    } else if (c.kind === 'obs') {
+      const o = c.o;
+      const kind = o.kind === 'rock' ? 'rock' : ['wall', 'crate', 'house', 'barn', 'cabin', 'jersey', 'tower', 'tent', 'hay'].includes(o.kind) ? 'wall' : 'metal';
+      if (kind === 'metal') {
+        this.fx.sparks(x, y, z, 14, 9);
+        sfx.metal(x, z, false);
+      } else {
+        this.fx.impact(x, y, z, kind);
+        sfx.thud(x, z);
+      }
+      if (o.kind === 'barrel' && auth) {
+        if (this.isHost) this.hostBarrel(o.bid, s.owner);
+        else this.session.send({ t: 'barrel', b: o.bid, by: s.owner });
+      }
+    } else if (this.world.inWater(x, z)) {
+      this.fx.impact(x, y, z, 'water');
+      sfx.splash(x, z);
+    } else {
+      this.fx.impact(x, y, z, 'ground');
+      sfx.thud(x, z);
+      this.stage.scorch(x, z, s.he ? 1.6 : 0.8);
     }
     if (s.he) {
-      this.fx.explosion(x, this.world.height(x, z), z, 0.6);
-      sfx.explosion(x, z, false);
-      this.stage.scorch(x, z, 1.8);
+      if (!this.world.inWater(x, z)) {
+        this.fx.explosion(x, this.world.height(x, z), z, 0.55);
+        this.stage.scorch(x, z, 1.8);
+      }
+      sfx.explosion(x, z, 0.5);
       if (auth) {
-        const m = { t: 'ex', x: q2(x), z: q2(z), by: s.owner, k: s.key };
+        const m = { t: 'ex', x: q2(x), z: q2(z), by: s.owner, k: s.key, d: Math.round(s.baseDmg * AMMO.he.splashMul) };
         this.onExplosion(m);
         this.emit(m);
       }
     }
   }
 
-  applyHit(tank, s, x, z) {
-    const m = { t: 'hit', v: tank.id, by: s.owner, d: Math.round(s.dmg), x: q2(x), z: q2(z), k: s.key };
+  // yetkili cihaz isabeti hesaplar ve bildirir
+  applyHit(tank, s, x, y, z, c, rico) {
+    const face = c.face === 3 ? 2 : c.face;
+    const mul = tank.spec.armor[face] || 1;
+    const dmg = rico ? 0 : Math.round(s.dmg * mul * rand(0.88, 1.12));
+    const m = { t: 'hit', v: tank.id, by: s.owner, d: dmg, x: q2(x), y: q2(y), z: q2(z), k: s.key, f: c.face, r: rico ? 1 : 0 };
     if (tank.kind === 'player') {
       this.directHits.add(s.key);
-      this.damageMe(s.dmg, s.owner, x, z);
       this.emit(m);
+      this.damageMe(dmg, s.owner, x, z, rico);
     } else {
-      if (s.owner === this.myId) {
-        this.ui.hitMarker();
-        sfx.hitMarker();
-      }
+      if (s.owner === this.myId) this.hitFeedback(tank, dmg, c.face, rico, x, y, z);
       if (this.isHost) {
-        this.damageBot(tank, s.dmg, s.owner);
         this.session.broadcast(m);
+        this.damageBot(tank, dmg, s.owner);
       } else this.session.send(m);
     }
   }
 
-  damageMe(d, by, x, z) {
+  // atan oyuncuya isabet geri bildirimi
+  hitFeedback(tank, dmg, face, rico, x, y, z) {
+    if (rico) {
+      this.ui.hitInfo('SEKTİ!', 'rico');
+      sfx.hitMarker('rico');
+      return;
+    }
+    this.stats.hits++;
+    this.stats.dmg += dmg;
+    const lethal = tank.alive && tank.hp - dmg <= 0;
+    this.ui.hitMarker(lethal);
+    sfx.hitMarker(lethal ? 'kill' : 'hit');
+    this.ui.dmgNumber(x, y + 1, z, dmg, face === 2 || face === 3);
+    this.ui.hitInfo(face === 2 || face === 3 ? 'KRİTİK VURUŞ' : 'DELİNDİ', face === 2 || face === 3 ? 'crit' : 'hit');
+  }
+
+  damageMe(d, by, x, z, rico) {
     const m = this.me;
     if (!m || !m.alive || m.protT > 0 || this.over) return;
-    const dmg = d * (m.shieldT > 0 ? 0.5 : 1);
-    m.hp -= dmg;
-    m.view.hit();
     if (x != null) this.ui.damageDir(angDiff(this.cam.yaw, Math.atan2(z - m.z, x - m.x)));
-    this.shake = Math.max(this.shake, 0.45);
-    this.app.vibrate(45);
+    if (rico) {
+      this.ui.hitInfo('Zırhından sekti', 'rico');
+      this.shake = Math.max(this.shake, 0.3);
+      return;
+    }
+    m.hp -= d;
+    this.stats.taken += d;
+    m.view.hit();
+    this.shake = Math.max(this.shake, 0.6);
+    this.app.vibrate(60);
+    this.ui.flashDamage();
     if (m.hp <= 0) this.killMe(by);
-    else this.sendState(true);
+    else this.sendState();
   }
 
   killMe(by) {
     const m = this.me;
     m.alive = false;
     m.hp = 0;
-    m.respawnT = 3.5;
+    m.respawnT = 4;
     m.deadT = 0;
+    this.cam.zoom = false;
     this.tankDeathFx(m);
     this.shake = 1;
-    this.app.vibrate(220);
+    this.app.vibrate(250);
     const k = this.tanks.get(by);
-    this.ui.banner('Vuruldun!', k ? `${k.name} seni vurdu` : '', 2);
+    this.ui.banner('İMHA EDİLDİN', k ? `${k.name} tarafından` : '', 2.2);
     if (this.mode === 'coop') this.ui.dead(true, null, 'Sonraki dalgada geri döneceksin');
     else this.ui.dead(true, 4);
     if (this.isHost) this.hostRecordDeath(this.myId, by);
     else {
-      this.sendState(true);
+      this.sendState();
       this.session.send({ t: 'die', v: this.myId, by });
     }
   }
 
   damageBot(t, d, by) {
     if (!t.alive || t.protT > 0) return;
-    t.hp -= d * (t.shieldT > 0 ? 0.5 : 1);
+    t.hp -= d;
     if (t.brain) t.brain.onHit(by);
     if (t.hp <= 0) {
       t.hp = 0;
       t.alive = false;
       t.deadT = 0;
-      t.respawnT = 3.5;
+      t.respawnT = 4;
       this.tankDeathFx(t);
       this.hostRecordDeath(t.id, by);
     }
@@ -615,9 +896,9 @@ export class Game {
 
   tankDeathFx(t) {
     const y = this.world.height(t.x, t.z);
-    const size = t.type === 'boss' ? 1.9 : t.type === 'heavy' ? 1.35 : 1.1;
+    const size = t.type === 'boss' ? 1.9 : t.type === 'heavy' || t.type === 'eheavy' ? 1.35 : 1.1;
     this.fx.explosion(t.x, y, t.z, size);
-    sfx.explosion(t.x, t.z, true);
+    sfx.explosion(t.x, t.z, size);
     this.stage.scorch(t.x, t.z, 2.6 * t.spec.scale);
     t.view.die();
     t.deadT = 0;
@@ -630,11 +911,11 @@ export class Game {
     if (!this.ended.has(m.k)) {
       this.ended.set(m.k, this.time);
       this.removeShell(m.k);
-      this.fx.explosion(x, this.world.height(x, z), z, 0.6);
-      sfx.explosion(x, z, false);
+      this.fx.explosion(x, this.world.height(x, z), z, 0.55);
+      sfx.explosion(x, z, 0.5);
       this.stage.scorch(x, z, 1.8);
     }
-    this.splash(x, z, ABILITY.heSplash, ABILITY.heSplashDmg, m.by, m.k);
+    this.splash(x, z, AMMO.he.splash, num(m.d) || 18, m.by, m.k);
   }
 
   // alan hasarı: herkes kendi tankına, oda sahibi botlara uygular
@@ -643,13 +924,12 @@ export class Game {
     const me = this.me;
     if (me && me.alive && by !== this.myId && !(key && this.directHits.has(key)) && (!att || this.hostile(att, me))) {
       const d = Math.hypot(me.x - x, me.z - z) - me.r * 0.6;
-      if (d < R) this.damageMe(dmg * (1 - Math.max(0, d) / R), by, x, z);
+      if (d < R) this.damageMe(Math.round(dmg * (1 - Math.max(0, d) / R)), by, x, z);
     }
     if (this.isHost) {
       for (const t of this.tanks.values()) {
-        if (t.kind === 'player' || !t.alive) continue;
-        if (att && !this.hostile(att, t) && t.id !== by) continue;
-        if (t.id === by) continue;
+        if (t.kind === 'player' || !t.alive || t.id === by) continue;
+        if (att && !this.hostile(att, t)) continue;
         const d = Math.hypot(t.x - x, t.z - z) - t.r * 0.6;
         if (d < R) this.damageBot(t, dmg * (1 - Math.max(0, d) / R), by);
       }
@@ -675,21 +955,22 @@ export class Game {
         if (m.o !== this.myId) this.spawnShell(m);
         break;
       case 'hit': {
-        const x = num(m.x) / 100, z = num(m.z) / 100;
+        const x = num(m.x) / 100, y = num(m.y) / 100, z = num(m.z) / 100;
         const v = this.tanks.get(m.v);
         if (!this.ended.has(m.k)) {
           this.ended.set(m.k, this.time);
           if (this.removeShell(m.k)) {
-            const y = this.world.height(x, z) + 1.2;
-            this.fx.impact(x, y, z, 'metal');
-            sfx.hit(x, z, false);
+            if (m.r) {
+              this.fx.ricochet(x, y, z, rand(-0.5, 0.5), 0.5, rand(-0.5, 0.5));
+              sfx.ricochet(x, z);
+            } else {
+              this.fx.impact(x, y, z, 'metal');
+              sfx.metal(x, z, true);
+            }
           }
         }
         if (v) v.view.hit();
-        if (m.by === this.myId && m.v !== this.myId) {
-          this.ui.hitMarker();
-          sfx.hitMarker();
-        }
+        if (m.by === this.myId && m.v !== this.myId && v) this.hitFeedback(v, num(m.d), m.f, !!m.r, x, y, z);
         if (this.isHost && v && v.kind !== 'player') this.damageBot(v, num(m.d), m.by);
         break;
       }
@@ -704,6 +985,9 @@ export class Game {
         break;
       case 'ex':
         this.onExplosion(m);
+        break;
+      case 'smoke':
+        if (m.o !== this.myId) this.onSmoke(m);
         break;
       case 'wave':
         this.onWave(m.n, m.boss);
@@ -729,8 +1013,8 @@ export class Game {
     }
     if (vt) this.ui.feed(kt, vt);
     if (by === this.myId && v !== this.myId && vt) {
-      const pts = vt.kind === 'enemy' ? TYPES[vt.type].score : 100;
-      this.ui.popup(vt.kind === 'enemy' ? `+${pts}` : 'VURUŞ! +1');
+      this.stats.kills++;
+      this.ui.killNotice(vt.name, vt.kind === 'enemy' ? TYPES[vt.type].score : 100);
     }
   }
 
@@ -738,8 +1022,8 @@ export class Game {
   hostInit() {
     this.nextEnemy = 1000;
     this.nextPickup = 1;
-    this.pickupT = 6;
-    this.waveState = { queue: [], spawnT: 0, breakT: this.wave ? 0 : 3, active: false };
+    this.pickupT = 8;
+    this.waveState = { queue: [], spawnT: 0, breakT: this.wave ? 0 : 3.5, active: false };
     this.scoreDirty = true;
     this.snapCount = 0;
   }
@@ -765,6 +1049,11 @@ export class Game {
         this.onMsg(m);
         this.session.broadcast(m, from);
         break;
+      case 'smoke':
+        if (m.o !== from) return;
+        this.onMsg(m);
+        this.session.broadcast(m, from);
+        break;
       case 'die':
         if (m.v !== from) return;
         if (t) {
@@ -785,18 +1074,16 @@ export class Game {
 
   recvState(t, s) {
     if (!Array.isArray(s)) return;
-    const st = { T: performance.now(), x: num(s[0]) / 100, z: num(s[1]) / 100, a: num(s[2]) / 1000, ta: num(s[3]) / 1000 };
-    this.applyRemote(t, st, num(s[4]), num(s[5]));
+    const st = { T: performance.now(), x: num(s[0]) / 100, z: num(s[1]) / 100, a: num(s[2]) / 1000, ta: num(s[3]) / 1000, e: num(s[4]) / 1000 };
+    this.applyRemote(t, st, num(s[5]), num(s[6]));
     t.last = s;
   }
 
-  // uzak tankın yeni durumu
   applyRemote(t, st, hp, flags) {
     const alive = !!(flags & 1);
     t.flags = flags;
     t.hp = hp;
     if (alive && !t.alive) {
-      // yeniden doğdu: ara değerleme geçmişini sil
       t.alive = true;
       t.seen = true;
       t.buf = [];
@@ -804,10 +1091,11 @@ export class Game {
       t.z = st.z;
       t.a = st.a;
       t.ta = st.ta;
+      t.baseY = this.world.height(st.x, st.z);
       t.view.revive();
       t.view.root.visible = true;
       t.view.lastA = null;
-      this.fx.spawnFx(st.x, this.world.height(st.x, st.z), st.z, t.color);
+      this.fx.spawnFx(st.x, t.baseY, st.z, t.color);
     } else if (!alive && t.alive) {
       t.alive = false;
       if (!t.view.dead) this.tankDeathFx(t);
@@ -827,8 +1115,7 @@ export class Game {
       ks.s += vt.kind === 'enemy' ? TYPES[vt.type].score : 100;
     }
     this.scoreDirty = true;
-    const msg = { t: 'kill', v, by };
-    this.session.broadcast(msg);
+    this.session.broadcast({ t: 'kill', v, by });
     this.onKill(v, by);
     if (vt && vt.kind === 'enemy' && Math.random() < 0.14) this.spawnPickup(vt.x, vt.z, 'repair');
     this.checkEnd();
@@ -838,18 +1125,15 @@ export class Game {
     const p = this.pickups.get(id);
     const t = this.tanks.get(pid);
     if (!p || !t || !t.alive) return;
-    const m = { t: 'pk', id, by: pid };
-    this.session.broadcast(m);
+    this.session.broadcast({ t: 'pk', id, by: pid });
     this.onPickupTaken(id, pid);
   }
 
   hostBarrel(b, by) {
     const o = this.world.barrels[b];
     if (!o || !o.alive) return;
-    const m = { t: 'boom', b, by };
-    this.session.broadcast(m);
+    this.session.broadcast({ t: 'boom', b, by });
     this.barrelGone(b, by, true);
-    // zincirleme patlama
     for (const n of this.world.barrels) {
       if (n.alive && Math.hypot(n.x - o.x, n.z - o.z) < 3.6) setTimeout(() => !this.disposed && this.hostBarrel(n.bid, by), 220);
     }
@@ -863,7 +1147,7 @@ export class Game {
     if (!fx) return;
     const y = this.world.height(o.x, o.z);
     this.fx.explosion(o.x, y, o.z, 1.05);
-    sfx.explosion(o.x, o.z, true);
+    sfx.explosion(o.x, o.z, 1);
     this.stage.scorch(o.x, o.z, 2.4);
     this.splash(o.x, o.z, BARREL.splash, BARREL.dmg, by, null);
     const d = Math.hypot(o.x - this.cam.pos.x, o.z - this.cam.pos.z);
@@ -871,30 +1155,33 @@ export class Game {
   }
 
   hostUpdate(dt) {
-    // botlar
     for (const t of [...this.tanks.values()]) {
       if (!t.local || t.kind === 'player') continue;
       this.timers(t, dt);
       if (!t.alive) {
         t.deadT += dt;
-        if (t.kind === 'bot' && t.deadT > 3.5 && !this.over) {
+        if (t.kind === 'bot' && t.deadT > 4 && !this.over) {
           this.placeAtSpawn(t, this.bestSpawn(t));
           t.protT = 2;
-        } else if (t.kind === 'enemy' && t.deadT > 7) this.removeTank(t.id);
+        } else if (t.kind === 'enemy' && t.deadT > 8) this.removeTank(t.id);
         continue;
       }
       if (this.over) continue;
       const c = t.brain.update(dt);
+      const pa = t.a;
       this.drive(t, c.throttle, c.steer, dt);
+      t.turnRate = angDiff(pa, t.a) / Math.max(dt, 1e-3);
+      const pta = t.ta;
       t.ta = turnTo(t.ta, c.aim != null ? c.aim : t.a, t.spec.turret * dt);
-      if (c.fire && t.reload <= 0) this.fire(t, false);
-      if (c.he && t.heCd <= 0) {
-        this.fire(t, true);
-        t.heCd = ABILITY.heCooldown * 1.5;
-      }
-      if (c.boost && t.boostCd <= 0) {
-        t.boostT = ABILITY.boostTime;
-        t.boostCd = ABILITY.boostCooldown * 1.3;
+      t.turretRate = Math.abs(angDiff(pta, t.ta)) / Math.max(dt, 1e-3);
+      t.elev += clamp((c.elev ?? 0) - t.elev, -t.spec.elev * dt, t.spec.elev * dt);
+      this.updateDispersion(t, dt);
+      if (c.fire && t.reload <= 0) this.fire(t);
+      if (c.smoke && t.smokeCd <= 0) {
+        t.smokeCd = CONSUMABLES.smoke.cd * 1.4;
+        const msg = { t: 'smoke', o: t.id, x: q2(t.x), z: q2(t.z) };
+        this.onSmoke(msg);
+        this.session.broadcast(msg);
       }
       if (t.kind === 'bot') {
         for (const p of this.pickups.values()) if (Math.hypot(p.x - t.x, p.z - t.z) < t.r + 1.4) this.hostPick(t.id, p.id);
@@ -908,7 +1195,7 @@ export class Game {
       }
       this.pickupT -= dt;
       if (this.pickupT <= 0) {
-        this.pickupT = rand(10, 16);
+        this.pickupT = rand(12, 18);
         if (this.pickups.size < 3) this.spawnPickup();
       }
       for (const p of [...this.pickups.values()]) {
@@ -928,10 +1215,10 @@ export class Game {
     const p = [], b = [], pk = [];
     for (const t of this.tanks.values()) {
       if (t.kind === 'player') {
-        if (t.local) p.push([t.id, q2(t.x), q2(t.z), q3(t.a), q3(t.ta), Math.max(0, Math.round(t.hp)), this.flagsOf(t)]);
+        if (t.local) p.push([t.id, q2(t.x), q2(t.z), q3(t.a), q3(t.ta), q3(t.elev), Math.max(0, Math.round(t.hp)), this.flagsOf(t)]);
         else if (t.last) p.push([t.id, ...t.last]);
       } else {
-        b.push([t.id, TYPE_LIST.indexOf(t.type), q2(t.x), q2(t.z), q3(t.a), q3(t.ta), Math.max(0, Math.round(t.hp)), this.flagsOf(t), t.maxHp]);
+        b.push([t.id, TYPE_LIST.indexOf(t.type), q2(t.x), q2(t.z), q3(t.a), q3(t.ta), q3(t.elev), Math.max(0, Math.round(t.hp)), this.flagsOf(t), t.maxHp]);
       }
     }
     for (const q of this.pickups.values()) pk.push([q.id, PICKUP_LIST.indexOf(q.type), Math.round(q.x * 10), Math.round(q.z * 10)]);
@@ -949,10 +1236,7 @@ export class Game {
 
   applyScores(sc) {
     if (!Array.isArray(sc)) return;
-    for (const r of sc) {
-      if (!Array.isArray(r)) continue;
-      this.scores.set(r[0], { k: num(r[1]), d: num(r[2]), s: num(r[3]) });
-    }
+    for (const r of sc) if (Array.isArray(r)) this.scores.set(r[0], { k: num(r[1]), d: num(r[2]), s: num(r[3]) });
   }
 
   // ---------- istemci: anlık görüntü ----------
@@ -967,7 +1251,7 @@ export class Game {
         if (!Array.isArray(r) || r[0] === this.myId) continue;
         const t = this.tanks.get(r[0]);
         if (!t) continue;
-        this.applyRemote(t, { T, x: num(r[1]) / 100, z: num(r[2]) / 100, a: num(r[3]) / 1000, ta: num(r[4]) / 1000 }, num(r[5]), num(r[6]));
+        this.applyRemote(t, { T, x: num(r[1]) / 100, z: num(r[2]) / 100, a: num(r[3]) / 1000, ta: num(r[4]) / 1000, e: num(r[5]) / 1000 }, num(r[6]), num(r[7]));
       }
     }
     const seenB = new Set();
@@ -978,21 +1262,18 @@ export class Game {
         seenB.add(id);
         let t = this.tanks.get(id);
         if (!t) {
-          const type = TYPE_LIST[num(r[1])] || 'medium';
-          if (type === 'bot') {
-            const info = this.botInfo.get(id) || { id, name: 'Bot', color: '#7E8A5A' };
-            t = this.addBot(info);
-          } else t = this.addEnemy(id, type);
+          const type = TYPE_LIST[num(r[1])] || 'emedium';
+          if (id < 1000) t = this.addBot(this.botInfo.get(id) || { id, name: 'Bot', color: '#7E8A5A', tank: type });
+          else t = this.addEnemy(id, type);
         }
-        if (r[8]) t.maxHp = num(r[8]);
-        this.applyRemote(t, { T, x: num(r[2]) / 100, z: num(r[3]) / 100, a: num(r[4]) / 1000, ta: num(r[5]) / 1000 }, num(r[6]), num(r[7]));
+        if (r[9]) t.maxHp = num(r[9]);
+        this.applyRemote(t, { T, x: num(r[2]) / 100, z: num(r[3]) / 100, a: num(r[4]) / 1000, ta: num(r[5]) / 1000, e: num(r[6]) / 1000 }, num(r[7]), num(r[8]));
       }
     }
     for (const t of [...this.tanks.values()]) {
       if (t.kind === 'player' || seenB.has(t.id)) continue;
       this.removeTank(t.id);
     }
-    // bonuslar
     const seenP = new Set();
     if (Array.isArray(m.pk)) {
       for (const r of m.pk) {
@@ -1010,7 +1291,6 @@ export class Game {
     if (m.sc) this.applyScores(m.sc);
   }
 
-  // uzak tankları geçmiş tampondan yumuşakça çiz
   updateRemotes(dt) {
     const now = performance.now();
     const rt = this.isHost ? now - INTERP_DELAY : now - (this.clockOffset || 0) - INTERP_DELAY;
@@ -1018,34 +1298,40 @@ export class Game {
       if (t.local) continue;
       const b = t.buf;
       if (!b.length) continue;
-      const px = t.x, pz = t.z;
+      const px = t.x, pz = t.z, pa = t.a, pta = t.ta;
       while (b.length > 2 && b[1].T <= rt) b.shift();
-      let x, z, a, ta;
-      if (b.length >= 2 && b[0].T <= rt) {
-        const k = clamp((rt - b[0].T) / Math.max(1, b[1].T - b[0].T), 0, 1.15);
-        x = lerp(b[0].x, b[1].x, k);
-        z = lerp(b[0].z, b[1].z, k);
-        a = lerpAng(b[0].a, b[1].a, k);
-        ta = lerpAng(b[0].ta, b[1].ta, k);
+      const s0 = b[0];
+      let x, z, a, ta, e;
+      if (b.length >= 2 && s0.T <= rt) {
+        const s1 = b[1];
+        const k = clamp((rt - s0.T) / Math.max(1, s1.T - s0.T), 0, 1.15);
+        x = lerp(s0.x, s1.x, k);
+        z = lerp(s0.z, s1.z, k);
+        a = lerpAng(s0.a, s1.a, k);
+        ta = lerpAng(s0.ta, s1.ta, k);
+        e = lerp(s0.e || 0, s1.e || 0, k);
       } else {
-        const s = b[0];
-        x = s.x;
-        z = s.z;
-        a = s.a;
-        ta = s.ta;
+        x = s0.x;
+        z = s0.z;
+        a = s0.a;
+        ta = s0.ta;
+        e = s0.e || 0;
       }
       t.x = x;
       t.z = z;
       t.a = a;
       t.ta = ta;
+      t.elev = e;
       t.seen = true;
-      if (t.alive) t.view.root.visible = true;
+      t.baseY = this.world.height(x, z);
       const k = damp(6, dt);
       t.vx = lerp(t.vx, (x - px) / Math.max(dt, 1e-3), k);
       t.vz = lerp(t.vz, (z - pz) / Math.max(dt, 1e-3), k);
-      t.shieldT = t.flags & 2 ? 1 : 0;
-      t.boostT = t.flags & 4 ? 1 : 0;
+      t.speed = Math.hypot(t.vx, t.vz);
+      t.turnRate = angDiff(pa, a) / Math.max(dt, 1e-3);
+      t.turretRate = Math.abs(angDiff(pta, ta)) / Math.max(dt, 1e-3);
       t.protT = t.flags & 16 ? 1 : 0;
+      t.rapidT = t.flags & 8 ? 1 : 0;
     }
   }
 
@@ -1062,32 +1348,27 @@ export class Game {
       x = s.x;
       z = s.z;
     }
-    if (!type) {
-      const r = Math.random();
-      type = r < 0.45 ? 'repair' : r < 0.72 ? 'rapid' : 'shield';
-    }
-    const id = this.nextPickup++;
-    this.addPickup(id, type, x, z);
+    if (!type) type = Math.random() < 0.6 ? 'repair' : 'rapid';
+    this.addPickup(this.nextPickup++, type, x, z);
   }
 
   addPickup(id, type, x, z) {
     const col = PICKUPS[type].color;
     const g = new THREE.Group();
-    const crate = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.8, 1.1), new THREE.MeshStandardMaterial({ color: '#3b3f32', roughness: 0.6, metalness: 0.3 }));
-    const band = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.22, 1.14), new THREE.MeshBasicMaterial({ color: col, toneMapped: false }));
-    const icon = new THREE.Mesh(
-      type === 'repair' ? new THREE.BoxGeometry(0.16, 0.5, 0.5) : type === 'shield' ? new THREE.SphereGeometry(0.3, 12, 8) : new THREE.ConeGeometry(0.25, 0.55, 3),
-      new THREE.MeshBasicMaterial({ color: col, toneMapped: false }));
-    icon.position.y = 0.75;
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.8, 1.1), new THREE.MeshStandardMaterial({ color: '#3f4435', roughness: 0.55, metalness: 0.35 }));
+    const band = new THREE.Mesh(new THREE.BoxGeometry(1.14, 0.2, 1.14), new THREE.MeshBasicMaterial({ color: col, toneMapped: false }));
+    const iconMat = new THREE.MeshBasicMaterial({ color: col, toneMapped: false });
+    const icon = new THREE.Group();
     if (type === 'repair') {
-      const i2 = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.5), icon.material);
-      i2.position.y = 0.75;
-      g.add(i2);
-    }
+      const b1 = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.16), iconMat);
+      const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.16), iconMat);
+      icon.add(b1, b2);
+    } else icon.add(new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.55, 3), iconMat));
+    icon.position.y = 0.8;
     crate.castShadow = true;
     g.add(crate, band, icon);
     const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.9, 7, 16, 1, true),
-      new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+      new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
     beam.position.y = 3;
     g.add(beam);
     const y = this.world.height(x, z);
@@ -1116,14 +1397,13 @@ export class Game {
     if (!type || !t) return;
     if (by === this.myId || (this.isHost && t.local && t.kind !== 'player')) {
       if (type === 'repair') t.hp = Math.min(t.maxHp, t.hp + PICKUPS.repair.hp);
-      else if (type === 'shield') t.shieldT = PICKUPS.shield.time;
       else t.rapidT = PICKUPS.rapid.time;
     }
     if (by === this.myId) {
       sfx.pickup();
-      this.ui.banner(PICKUPS[type].label, '', 1.2);
+      this.ui.hitInfo(PICKUPS[type].label, 'good');
       this.app.vibrate(25);
-      this.sendState(true);
+      this.sendState();
     }
   }
 
@@ -1131,15 +1411,13 @@ export class Game {
     for (const p of this.pickups.values()) {
       p.t += dt;
       p.g.position.y = p.y + 0.75 + Math.sin(p.t * 2.2) * 0.18;
-      p.g.children[0].rotation.y = p.t * 0.9;
-      p.g.children[1].rotation.y = p.t * 0.9;
-      p.g.children[2].rotation.y = -p.t * 1.6;
+      for (let i = 0; i < 3; i++) p.g.children[i].rotation.y = p.t * (i === 2 ? -1.6 : 0.9);
       p.g.visible = !(p.life < 5 && Math.floor(p.t * 6) % 2);
       if (Math.random() < dt * 3) this.fx.sparkle(p.x, p.y + 0.4, p.z, PICKUPS[p.type].color);
     }
   }
 
-  // ---------- dalgalar (birlikte savaş) ----------
+  // ---------- dalgalar ----------
   waveUpdate(dt) {
     const W = this.waveState;
     let alive = 0;
@@ -1150,16 +1428,15 @@ export class Game {
       if (W.breakT <= 0) this.startWave();
       return;
     }
-    const np = this.playerCount();
-    const maxAlive = 6 + 2 * np;
+    const maxAlive = 5 + 2 * this.playerCount();
     W.spawnT -= dt;
     if (W.queue.length && W.spawnT <= 0 && alive < maxAlive) {
       this.spawnEnemy(W.queue.shift());
-      W.spawnT = rand(0.7, 1.6);
+      W.spawnT = rand(0.8, 1.8);
     }
     if (!W.queue.length && alive === 0) {
       W.active = false;
-      W.breakT = 4;
+      W.breakT = 5;
       this.ui.banner('Dalga temizlendi!', 'Sıradaki dalga geliyor…', 2);
     }
   }
@@ -1168,21 +1445,20 @@ export class Game {
     const W = this.waveState;
     const n = this.wave + 1;
     const np = this.playerCount();
-    const count = Math.round((2.5 + n * 1.5) * (1 + 0.45 * (np - 1)));
+    const count = Math.round((2.5 + n * 1.4) * (1 + 0.45 * (np - 1)));
     const q = [];
     for (let i = 0; i < count; i++) {
       const r = Math.random();
       const pH = n >= 4 ? Math.min(0.3, 0.045 * n) : 0;
       const pM = n >= 2 ? Math.min(0.45, 0.12 * n) : 0;
-      q.push(r < pH ? 'heavy' : r < pH + pM ? 'medium' : 'light');
+      q.push(r < pH ? 'eheavy' : r < pH + pM ? 'emedium' : 'elight');
     }
     const boss = n % 5 === 0;
     if (boss) q.splice(2, 0, 'boss');
     W.queue = q;
     W.active = true;
     W.spawnT = 1;
-    const m = { t: 'wave', n, boss: boss ? 1 : 0 };
-    this.session.broadcast(m);
+    this.session.broadcast({ t: 'wave', n, boss: boss ? 1 : 0 });
     this.onWave(n, boss);
   }
 
@@ -1190,13 +1466,13 @@ export class Game {
     if (n <= this.wave && this.wave) return;
     this.wave = n;
     sfx.horn();
-    this.ui.banner('Dalga ' + n, boss ? 'KOMUTAN TANKI geliyor!' : n === 1 ? 'Düşmanlar kenarlardan geliyor' : '', 2.2);
+    this.ui.banner('Dalga ' + n, boss ? 'KOMUTAN TANKI geliyor!' : n === 1 ? 'Düşmanlar kenarlardan geliyor' : '', 2.4);
     const m = this.me;
     if (m) {
       if (!m.alive) this.spawnMe();
       else if (n > 1) {
         m.hp = Math.min(m.maxHp, m.hp + 35);
-        this.sendState(true);
+        this.sendState();
       }
     }
   }
@@ -1242,61 +1518,65 @@ export class Game {
     if (this.mode === 'dm') rows.sort((a, b) => b[3] - a[3] || a[4] - b[4]);
     else rows.sort((a, b) => b[5] - a[5]);
     const r = { mode: this.mode, reason, wave: this.wave, rows, winner: rows.length ? rows[0][0] : null };
-    const msg = { t: 'end', r };
-    // son skorları gönder, sonra bitir
     this.session.broadcast({ t: 'sc', sc: this.packScores() });
-    this.session.broadcast(msg);
+    this.session.broadcast({ t: 'end', r });
     setTimeout(() => !this.disposed && this.finish(r), 50);
   }
 
   finish(r) {
     if (this.over) return;
     this.over = true;
-    sfx.engineSet(0, false);
+    this.cam.zoom = false;
+    sfx.engineSet(0, 0, false, 0, 0.1);
     setTimeout(() => {
-      if (!this.disposed) this.ui.showResults(r, this);
-    }, 1400);
+      if (!this.disposed) this.app.matchEnded(r, this);
+    }, 1600);
   }
 
   // ---------- görseller ----------
   updateVisuals(dt) {
     const camX = this.cam.pos.x, camZ = this.cam.pos.z;
     for (const t of this.tanks.values()) {
-      const vis = t.seen && (t.alive || t.deadT < 12);
-      t.view.update(dt, { x: t.x, z: t.z, a: t.a, ta: t.ta, shield: t.protT > 0 ? 2 : t.shieldT > 0 ? 1 : 0, visible: vis }, this.world);
-      if (!vis) continue;
-      const near = Math.hypot(t.x - camX, t.z - camZ) < 75;
+      const shown = t.seen && (t.alive || t.deadT < 12);
+      t.view.update(dt, { x: t.x, z: t.z, a: t.a, ta: t.ta, elev: t.elev, prot: t.protT > 0, visible: shown && !(t === this.me && this.cam.zoom) }, this.world);
+      if (!shown) continue;
+      const near = Math.hypot(t.x - camX, t.z - camZ) < 80;
       if (!t.alive) {
         if (!t.local) t.deadT += dt;
         t.fireT -= dt;
-        if (near && t.deadT < 7 && t.fireT <= 0) {
+        if (near && t.deadT < 8 && t.fireT <= 0) {
           t.fireT = 0.05;
-          this.fx.fire(t.x, this.world.height(t.x, t.z) + 0.9 * t.spec.scale, t.z, t.spec.scale * Math.max(0.3, 1 - t.deadT / 7));
+          this.fx.fire(t.x, t.baseY + 0.9 * t.spec.scale, t.z, t.spec.scale * Math.max(0.3, 1 - t.deadT / 8));
         }
         continue;
       }
       if (!near) continue;
       const sp = Math.hypot(t.vx, t.vz);
       const c = Math.cos(t.a), s = Math.sin(t.a);
-      const L = t.view.g.spec.len * 0.5 * t.spec.scale, wz = t.view.g.trackZ * t.spec.scale;
-      const gy = this.world.height(t.x, t.z);
+      const L = t.hl, wz = t.view.g.trackZ * t.spec.scale;
+      const gy = t.baseY;
+      const wet = this.world.inWater(t.x, t.z);
       t.trackD += sp * dt;
       if (t.trackD > 0.9) {
         t.trackD = 0;
-        this.stage.trackMark(t.x - c * L * 0.7, t.z - s * L * 0.7, t.a, wz * 2 + 0.5, this.theme.snow ? 0.5 : 0.32);
+        this.stage.trackMark(t.x - c * L * 0.7, t.z - s * L * 0.7, t.a, wz * 2 + 0.5, this.theme.snow ? 0.5 : 0.34);
       }
       t.dustT -= dt;
-      if (sp > 1.5 && t.dustT <= 0) {
+      if (sp > 1.2 && t.dustT <= 0) {
         t.dustT = 0.07;
-        const amt = Math.min(1.4, sp / 7) * (this.theme.snow ? 1.2 : this.theme.trees[0] === 'palm' ? 1.5 : 0.9);
-        for (const side of [-1, 1]) this.fx.dust(t.x - c * L - s * wz * side, gy, t.z - s * L + c * wz * side, amt, -c * sp * 0.2, -s * sp * 0.2);
+        const amt = Math.min(1.5, sp / 7) * (this.theme.snow ? 1.2 : this.theme.trees[0] === 'palm' ? 1.6 : 0.9);
+        for (const side of [-1, 1]) {
+          const x = t.x - c * L - s * wz * side, z = t.z - s * L + c * wz * side;
+          if (wet) this.fx.splash(x, gy, z, amt);
+          else this.fx.dust(x, gy, z, amt, -c * sp * 0.2, -s * sp * 0.2);
+        }
       }
       t.exT -= dt;
       if (t.exT <= 0) {
-        t.exT = t.boostT > 0 ? 0.04 : sp > 1 ? 0.14 : 0.3;
+        const hard = Math.abs(t.view.acc || 0) > 1.5;
+        t.exT = hard ? 0.05 : sp > 1 ? 0.14 : 0.32;
         const ex = t.x - c * (L + 0.1), ez = t.z - s * (L + 0.1);
-        this.fx.exhaust(ex, gy + 0.85 * t.spec.scale, ez, -c, -s, t.boostT > 0);
-        if (t.boostT > 0) this.fx.fire(ex, gy + 0.6, ez, 0.4);
+        this.fx.exhaust(ex, gy + 0.9 * t.spec.scale, ez, -c, -s, hard);
       }
     }
   }
@@ -1304,41 +1584,42 @@ export class Game {
   updateCamera(dt) {
     const m = this.me, c = this.cam, cam = this.stage.camera;
     if (!m) return;
-    if (!c.init) {
-      c.yaw = m.a;
-    }
-    if (m.alive) c.yaw = lerpAng(c.yaw, m.a, damp(3.2, dt));
-    else c.yaw += dt * 0.3;
+    if (!m.alive) c.yaw += dt * 0.15;
     const portrait = this.stage.h > this.stage.w;
-    const dist = (m.alive ? 10.5 : 17) * (portrait ? 1.3 : 1), hgt = (m.alive ? 5.6 : 10) * (portrait ? 1.35 : 1);
-    const gy = this.world.height(m.x, m.z);
-    const cx = Math.cos(c.yaw), cz = Math.sin(c.yaw);
-    const wx = m.x - cx * dist, wz = m.z - cz * dist;
-    const wy = Math.max(gy + hgt, this.world.height(wx, wz) + 2.5);
-    const lx = m.x + cx * 5, lz = m.z + cz * 5;
-    if (!c.init) {
-      c.pos.set(wx, wy, wz);
-      c.look.set(lx, gy + 1.2, lz);
+    const D = this.camDir(TV2);
+    if (c.zoom && m.alive) {
+      // dürbün: nişancı görüşü (taretin üstünden)
+      const gx = m.x + Math.cos(m.a) * m.gunX, gz = m.z + Math.sin(m.a) * m.gunX;
+      c.pos.set(gx + Math.cos(c.yaw) * 1.2, m.baseY + m.gunH + 0.6, gz + Math.sin(c.yaw) * 1.2);
       c.init = true;
+    } else {
+      const dist = (m.alive ? c.dist : 16) * (portrait ? 1.25 : 1) * (0.9 + m.spec.scale * 0.1);
+      const pivotY = m.baseY + m.hh + 0.9;
+      TV3.set(m.x - D.x * dist, pivotY - D.y * dist + 0.2, m.z - D.z * dist);
+      TV3.y = Math.max(TV3.y, this.world.height(TV3.x, TV3.z) + 0.9);
+      if (!c.init) {
+        c.pos.copy(TV3);
+        c.init = true;
+      }
+      c.pos.lerp(TV3, damp(14, dt));
     }
-    c.pos.lerp(TV1.set(wx, wy, wz), damp(6, dt));
-    c.look.lerp(TV2.set(lx, gy + 1.2, lz), damp(9, dt));
     cam.position.copy(c.pos);
-    this.shake = Math.max(0, this.shake - dt * 2.2);
+    this.shake = Math.max(0, this.shake - dt * 2.4);
     if (this.shake > 0 && this.app.settings.shake) {
-      const s = this.shake * this.shake * 0.7;
+      const s = this.shake * this.shake * (c.zoom ? 0.12 : 0.45);
       cam.position.x += rand(-s, s);
       cam.position.y += rand(-s, s);
       cam.position.z += rand(-s, s);
     }
-    cam.lookAt(c.look);
-    this.stage.setFadeTarget(m.x, gy + 1.2, m.z);
-    const baseFov = portrait ? 72 : 58;
-    c.fov = lerp(c.fov || baseFov, baseFov + (m.boostT > 0 ? 7 : 0), damp(4, dt));
+    TV1.copy(cam.position).addScaledVector(D, 50);
+    cam.lookAt(TV1);
+    const baseFov = c.zoom ? (portrait ? 30 : CAMERA.zoomFov) : this.stage.baseFov;
+    c.fov = c.zoom ? baseFov : lerp(c.fov || baseFov, baseFov + clamp(Math.abs(m.speed) / m.spec.speed, 0, 1) * 4, damp(4, dt));
     if (Math.abs(cam.fov - c.fov) > 0.05) {
       cam.fov = c.fov;
       cam.updateProjectionMatrix();
     }
+    this.stage.setFadeTarget(c.zoom ? null : m.x, m.baseY + 1.2, m.z);
     sfx.listener.x = m.x;
     sfx.listener.z = m.z;
     sfx.listener.a = c.yaw;
@@ -1354,5 +1635,8 @@ export class Game {
     this.shells = [];
     this.fx.clear();
     this.ui.endHud();
+    const cam = this.stage.camera;
+    cam.fov = this.stage.baseFov;
+    cam.updateProjectionMatrix();
   }
 }
